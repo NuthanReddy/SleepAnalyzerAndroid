@@ -6,8 +6,8 @@ import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Nightlight
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.SelfImprovement
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.ui.graphics.vector.ImageVector
 
 sealed class Screen(val route: String, val title: String, val icon: ImageVector? = null) {
@@ -15,7 +15,7 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
     data object Track : Screen("track", "Sleep", Icons.Default.Nightlight)
     data object Sounds : Screen("sounds", "Sounds", Icons.Default.MusicNote)
     data object Alarm : Screen("alarm", "Alarm", Icons.Default.Alarm)
-    data object More : Screen("more", "Profile", Icons.Default.Person)
+    data object More : Screen("more", "Settings", Icons.Default.Settings)
 
     // Onboarding
     data object Onboarding : Screen("onboarding", "Welcome")
