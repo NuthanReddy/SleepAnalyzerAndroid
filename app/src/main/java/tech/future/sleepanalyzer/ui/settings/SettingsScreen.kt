@@ -3,6 +3,7 @@ package tech.future.sleepanalyzer.ui.settings
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -22,6 +23,7 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.SettingsVoice
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.UploadFile
@@ -54,6 +56,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -61,7 +64,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 import tech.future.sleepanalyzer.auth.AuthState
 import tech.future.sleepanalyzer.di.ServiceLocator
+import tech.future.sleepanalyzer.service.BedtimeDetectionService
 import tech.future.sleepanalyzer.sync.CloudSyncScheduler
+import tech.future.sleepanalyzer.wearables.HealthConnectSource
 import tech.future.sleepanalyzer.ui.wearables.WearablesSection
 import tech.future.sleepanalyzer.util.PermissionsUtil
 
@@ -72,6 +77,7 @@ fun SettingsScreen(
     onReEnroll: () -> Unit,
     onOpenProfile: () -> Unit,
     onOpenSignup: () -> Unit,
+    onOpenPrivacy: () -> Unit = {},
     onSignedOut: (goHome: Boolean) -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -83,6 +89,12 @@ fun SettingsScreen(
     val dataRequestRepository = remember { ServiceLocator.dataRequestRepository }
     val voiceIsolationEnabled by preferences.voiceIsolationEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
     val micForStagingEnabled by preferences.micForStagingEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
+    val bedtimeAutoDetectEnabled by preferences.bedtimeAutoDetectEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
+    val detailedHealthContextEnabled by preferences.detailedHealthContextEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
+    val detailedHealthPermissions = remember { HealthConnectSource(context).detailedContextPermissions() }
+    val detailedHealthPermissionLauncher = rememberLauncherForActivityResult(
+        contract = PermissionController.createRequestPermissionResultContract()
+    ) { /* Reads are permission-gated; nothing to do with the result set here. */ }
     val cloudSyncEnabled by preferences.cloudSyncEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
     val activeVoiceProfile by repository.getActiveVoiceProfileFlow().collectAsStateWithLifecycle(initialValue = null)
     val userAccount by repository.observeUserAccount().collectAsStateWithLifecycle(initialValue = null)
@@ -237,12 +249,93 @@ fun SettingsScreen(
                 }
             }
 
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Detect bedtime automatically",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Start tracking on its own once your screen is off and you've been still for a while. Uses motion only \u2014 no audio.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = bedtimeAutoDetectEnabled,
+                        onCheckedChange = { enabled ->
+                            scope.launch { preferences.setBedtimeAutoDetectEnabled(enabled) }
+                            val intent = Intent(context, BedtimeDetectionService::class.java).apply {
+                                action = if (enabled) {
+                                    BedtimeDetectionService.ACTION_START
+                                } else {
+                                    BedtimeDetectionService.ACTION_STOP
+                                }
+                            }
+                            if (enabled) {
+                                context.startForegroundService(intent)
+                            } else {
+                                context.startService(intent)
+                            }
+                        }
+                    )
+                }
+            }
+
             SettingsRow(
                 icon = Icons.Default.SettingsVoice,
                 title = "Re-enroll voice profile",
                 subtitle = if (activeVoiceProfile != null) "Replace your current 5-second sample" else "Create your first voice profile",
                 onClick = onReEnroll
             )
+
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Detailed health context",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Read caffeine, hydration, and body-temperature logs from Health Connect to add context to your sleep reports. Opt-in; grants extra Health Connect permissions.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = detailedHealthContextEnabled,
+                        onCheckedChange = { enabled ->
+                            scope.launch { preferences.setDetailedHealthContextEnabled(enabled) }
+                            if (enabled) {
+                                runCatching { detailedHealthPermissionLauncher.launch(detailedHealthPermissions) }
+                            }
+                        }
+                    )
+                }
+            }
 
             SettingsRow(
                 icon = Icons.Default.Schedule,
@@ -439,6 +532,13 @@ fun SettingsScreen(
                     }
                 }
             }
+
+            SettingsRow(
+                icon = Icons.Default.Shield,
+                title = "Privacy",
+                subtitle = "What stays on-device, what syncs, and how export/delete work",
+                onClick = onOpenPrivacy
+            )
 
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),

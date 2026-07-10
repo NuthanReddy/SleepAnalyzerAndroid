@@ -20,6 +20,7 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
     data object Onboarding : Screen("onboarding", "Welcome")
     data object VoiceEnroll : Screen("voice_enroll", "Voice Setup")
     data object Settings : Screen("settings", "Settings")
+    data object Privacy : Screen("privacy", "Privacy")
     data object Profile : Screen("profile", "Profile")
     data object Signup : Screen("signup", "Sign up")
 

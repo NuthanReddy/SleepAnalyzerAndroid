@@ -7,6 +7,9 @@ enum class WearableMetric(val unit: String) {
     RESPIRATORY_RATE("rpm"),
     SPO2("percent"),
     SKIN_TEMPERATURE("celsius"),
+    BODY_TEMPERATURE("celsius"),
+    CAFFEINE("mg"),
+    HYDRATION("ml"),
     STEPS("count"),
     SLEEP_STAGE_SOURCE("stage"),
     RESTING_HEART_RATE("bpm");

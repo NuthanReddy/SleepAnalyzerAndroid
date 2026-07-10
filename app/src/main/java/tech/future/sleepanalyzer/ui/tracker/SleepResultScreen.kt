@@ -67,6 +67,7 @@ import tech.future.sleepanalyzer.ui.theme.SleepREM
 import tech.future.sleepanalyzer.ui.theme.SleepScore
 import tech.future.sleepanalyzer.ui.theme.SleepSecondary
 import tech.future.sleepanalyzer.ui.theme.SleepSurfaceVariant
+import tech.future.sleepanalyzer.wearables.HealthContextInsight
 import tech.future.sleepanalyzer.wearables.WearableMetric
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -79,6 +80,7 @@ fun SleepResultScreen(
     )
 ) {
     val session by viewModel.session.collectAsStateWithLifecycle()
+    val healthInsights by viewModel.healthInsights.collectAsStateWithLifecycle()
     val repository = remember { ServiceLocator.repository }
     val heartRateSamples by repository.observeWearableSamples(sessionId, WearableMetric.HEART_RATE.name)
         .collectAsStateWithLifecycle(initialValue = emptyList())
@@ -168,6 +170,10 @@ fun SleepResultScreen(
                 if (heartRateSamples.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(12.dp))
                     HeartRateCard(heartRateSamples)
+                }
+                if (healthInsights.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    HealthContextCard(healthInsights)
                 }
                 Spacer(modifier = Modifier.height(32.dp))
             }
@@ -499,6 +505,44 @@ private fun HeartRateStat(
 }
 
 private const val MILLIS_PER_MINUTE = 60_000L
+
+@Composable
+private fun HealthContextCard(insights: List<HealthContextInsight>) {
+    if (insights.isEmpty()) return
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Health context",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "From Health Connect. These notes are informational and don't change your score.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            insights.forEach { insight ->
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = insight.label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = insight.detail,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
 
 fun getScoreLabel(score: Int): String = when {
     score >= 90 -> "Excellent Sleep! 🌟"

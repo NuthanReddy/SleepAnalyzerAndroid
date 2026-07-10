@@ -7,6 +7,7 @@ object Constants {
     const val ALARM_CHANNEL_ID = "alarm"
     const val ALARM_PLAYBACK_CHANNEL_ID = "alarm_playback"
     const val SOUND_PLAYER_CHANNEL_ID = "sound_player"
+    const val BEDTIME_DETECTION_CHANNEL_ID = "bedtime_detection"
 
     // Notification IDs
     const val SLEEP_TRACKING_NOTIFICATION_ID = 1001
@@ -15,6 +16,7 @@ object Constants {
     const val SOUND_PLAYER_NOTIFICATION_ID = 1004
     const val ALARM_PLAYBACK_NOTIFICATION_ID = 1005
     const val SMART_WAKE_NOTIFICATION_ID = 1006
+    const val BEDTIME_DETECTION_NOTIFICATION_ID = 1007
 
     // Sleep scoring weights
     const val DURATION_WEIGHT = 0.35f

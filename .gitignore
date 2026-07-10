@@ -13,5 +13,7 @@
 .externalNativeBuild
 .cxx
 local.properties
+# Kotlin compiler daemon working dir (incremental-compile logs, caches)
+.kotlin/
 # Replace with your real Firebase config; commit only if your team agrees to share project config.
 app/google-services.json

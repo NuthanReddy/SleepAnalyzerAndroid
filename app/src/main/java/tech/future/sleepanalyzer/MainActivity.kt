@@ -48,6 +48,7 @@ import tech.future.sleepanalyzer.ui.onboarding.VoiceEnrollScreen
 import tech.future.sleepanalyzer.ui.profile.ProfileEditorScreen
 import tech.future.sleepanalyzer.ui.programs.SleepProgramsScreen
 import tech.future.sleepanalyzer.ui.recorder.RecorderScreen
+import tech.future.sleepanalyzer.ui.settings.PrivacyScreen
 import tech.future.sleepanalyzer.ui.settings.SettingsScreen
 import tech.future.sleepanalyzer.ui.sounds.SoundPlayerScreen
 import tech.future.sleepanalyzer.ui.sounds.SoundsLibraryScreen
@@ -196,6 +197,7 @@ fun SleepAnalyzerApp(
                     onReEnroll = { navController.navigate(Screen.VoiceEnroll.route) },
                     onOpenProfile = { navController.navigate(Screen.Profile.route) },
                     onOpenSignup = { navController.navigate(Screen.Signup.route) },
+                    onOpenPrivacy = { navController.navigate(Screen.Privacy.route) },
                     onSignedOut = { goHome ->
                         onSignedOut()
                         if (goHome) {
@@ -210,6 +212,10 @@ fun SleepAnalyzerApp(
 
             composable(Screen.Profile.route) {
                 ProfileEditorScreen(onBack = { navController.popBackStack() })
+            }
+
+            composable(Screen.Privacy.route) {
+                PrivacyScreen(onBack = { navController.popBackStack() })
             }
 
             composable(Screen.Signup.route) {

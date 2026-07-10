@@ -109,43 +109,10 @@ class AlarmScheduler(context: Context) {
     }
 
     private fun calculateNextTriggerTime(alarm: AlarmConfig): Long =
-        calculateNextScheduledTime(alarm, subtractWakeWindow = true)
+        AlarmTimeCalculator.nextTriggerMillis(alarm, Calendar.getInstance(), subtractWakeWindow = true)
 
     private fun calculateNextDeadlineTime(alarm: AlarmConfig): Long =
-        calculateNextScheduledTime(alarm, subtractWakeWindow = false)
-
-    private fun calculateNextScheduledTime(alarm: AlarmConfig, subtractWakeWindow: Boolean): Long {
-        val now = Calendar.getInstance()
-        val alarmTime = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, alarm.hour)
-            set(Calendar.MINUTE, alarm.minute)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }
-
-        val enabledDays = alarm.daysOfWeek.split(",").mapNotNull { it.trim().toIntOrNull() }.toSet()
-        while (alarmTime.before(now) || (enabledDays.isNotEmpty() && calendarDayToOurDay(alarmTime.get(Calendar.DAY_OF_WEEK)) !in enabledDays)) {
-            alarmTime.add(Calendar.DAY_OF_YEAR, 1)
-        }
-
-        if (subtractWakeWindow) {
-            alarmTime.add(Calendar.MINUTE, -alarm.wakeWindowMinutes)
-        }
-        return alarmTime.timeInMillis
-    }
-
-    private fun calendarDayToOurDay(calendarDay: Int): Int {
-        return when (calendarDay) {
-            Calendar.MONDAY -> 1
-            Calendar.TUESDAY -> 2
-            Calendar.WEDNESDAY -> 3
-            Calendar.THURSDAY -> 4
-            Calendar.FRIDAY -> 5
-            Calendar.SATURDAY -> 6
-            Calendar.SUNDAY -> 7
-            else -> 1
-        }
-    }
+        AlarmTimeCalculator.nextTriggerMillis(alarm, Calendar.getInstance(), subtractWakeWindow = false)
 
     companion object {
         private const val WINDOW_REQUEST_MASK = 0x5555_DEAD

@@ -19,6 +19,8 @@ class AppPreferences(private val context: Context) {
         val VOICE_ISOLATION_ENABLED = booleanPreferencesKey("voice_isolation_enabled")
         val VOICE_ISOLATION_ASKED = booleanPreferencesKey("voice_isolation_asked")
         val MIC_FOR_STAGING_ENABLED = booleanPreferencesKey("mic_for_staging_enabled")
+        val BEDTIME_AUTO_DETECT_ENABLED = booleanPreferencesKey("bedtime_auto_detect_enabled")
+        val DETAILED_HEALTH_CONTEXT_ENABLED = booleanPreferencesKey("detailed_health_context_enabled")
         val PROGRAMS_SEEDED = booleanPreferencesKey("programs_seeded")
         val CLOUD_SYNC_ENABLED = booleanPreferencesKey("cloud_sync_enabled")
         val LAST_DATA_REQUEST_ID = stringPreferencesKey("last_data_request_id")
@@ -30,6 +32,8 @@ class AppPreferences(private val context: Context) {
     val voiceIsolationEnabledFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.VOICE_ISOLATION_ENABLED] ?: false }
     val voiceIsolationAskedFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.VOICE_ISOLATION_ASKED] ?: false }
     val micForStagingEnabledFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.MIC_FOR_STAGING_ENABLED] ?: false }
+    val bedtimeAutoDetectEnabledFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.BEDTIME_AUTO_DETECT_ENABLED] ?: false }
+    val detailedHealthContextEnabledFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.DETAILED_HEALTH_CONTEXT_ENABLED] ?: false }
     val programsSeededFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.PROGRAMS_SEEDED] ?: false }
     val cloudSyncEnabledFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.CLOUD_SYNC_ENABLED] ?: false }
     val lastDataRequestIdFlow: Flow<String?> = context.dataStore.data.map { it[Keys.LAST_DATA_REQUEST_ID] }
@@ -48,6 +52,14 @@ class AppPreferences(private val context: Context) {
 
     suspend fun setMicForStagingEnabled(value: Boolean) {
         context.dataStore.edit { it[Keys.MIC_FOR_STAGING_ENABLED] = value }
+    }
+
+    suspend fun setBedtimeAutoDetectEnabled(value: Boolean) {
+        context.dataStore.edit { it[Keys.BEDTIME_AUTO_DETECT_ENABLED] = value }
+    }
+
+    suspend fun setDetailedHealthContextEnabled(value: Boolean) {
+        context.dataStore.edit { it[Keys.DETAILED_HEALTH_CONTEXT_ENABLED] = value }
     }
 
     suspend fun setProgramsSeeded(value: Boolean) {

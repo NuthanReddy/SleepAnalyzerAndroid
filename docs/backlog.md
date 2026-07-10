@@ -104,7 +104,7 @@ Each entry has a fixed shape:
 - **Why**: Each unlocks a niche but real insight. Caffeine + bedtime hour explains delayed sleep onset; menstrual phase explains REM/deep ratio shifts; CGM nocturnal lows explain fragmented sleep.
 - **Acceptance**: Each metric appears as a chip in Sleep Result when present, and contributes a documented adjustment to scoring.
 - **Notes**: Each new permission adds a prompt — bundle them into one "Detailed health context" Settings toggle so the user opts in once.
-- **Status**: Open.
+- **Status**: **Partially Fixed**. Implemented the caffeine / hydration / body-temperature slice. `WearableMetric` gained `CAFFEINE`, `HYDRATION`, `BODY_TEMPERATURE`; `HealthConnectSource` reads `NutritionRecord` (caffeine mass), `HydrationRecord`, and `BodyTemperatureRecord` via a separate `detailedContextPermissions()` set (kept out of the base required set so `hasPermissions()` never regresses for users on the core grant). A pure, unit-tested `HealthContextInsights` layer (`HealthContextInsightsTest`, 7 tests) turns them into informational notes surfaced in a new "Health context" card on the Sleep Result screen — deliberately **not** fabricated score deltas. Gated behind a "Detailed health context" opt-in Settings toggle (`detailedHealthContextEnabled`) that requests the extra HC permissions, and a `WearableSyncManager.effectiveMetrics()` gate so the detailed reads only run when enabled. **Deferred**: `BloodPressureRecord`, `BloodGlucoseRecord`/CGM, and `MenstruationFlowRecord` — sensitive categories whose "documented scoring adjustment" is clinically speculative; left open pending a validated model.
 
 ### 8. Skin temperature consumption
 
@@ -137,7 +137,7 @@ Each entry has a fixed shape:
 - **Why**: Matches the Sleep Monitor "no friction" pitch from the user's earlier comparison.
 - **Acceptance**: A user who enables it and goes to bed without touching the app wakes up to a normal sleep report.
 - **Notes**: Make the detection conservative — false-positive sessions (e.g. user sitting still watching TV) are worse than missed nights.
-- **Status**: Open.
+- **Status**: **Fixed**. Pure `sleep/BedtimeDetector` state machine (clock-injected, fully deterministic) watches screen-off + accelerometer-still + mic-quiet and only triggers after N consecutive quiet minutes, latching once per quiet window and resetting on **any** violation (screen on, motion above threshold, mic not quiet when present) — conservative by design. Covered by `BedtimeDetectorTest` (11 tests). A thin `service/BedtimeDetectionService` (screen-state receiver + accelerometer) drives the detector and, on trigger, inserts a real `SleepSession` row and starts `SleepTrackingService` exactly like the manual path. Opt-in via a "Detect bedtime automatically" Settings toggle (`bedtimeAutoDetectEnabled`, default off); `BootReceiver` restarts the detector after reboot when enabled.
 
 ---
 
@@ -148,14 +148,14 @@ Each entry has a fixed shape:
 - **What**: Lightweight mode of `AudioRecorderService` that runs the existing pipeline only as far as `MicSleepSignalAggregator` — no encoding, no Room writes for individual events. Suitable for users who want stage estimation but not snore review.
 - **Why**: Saves storage and a tiny amount of CPU; lets the mic-staging toggle work even when the user wants no audio review.
 - **Acceptance**: New `AudioRecorderService.ACTION_START_SIGNAL_ONLY` extra; settings explains the distinction.
-- **Status**: Open.
+- **Status**: **Fixed**. `AudioRecorderService` gained an `ACTION_START_SIGNAL_ONLY` start action that sets a `signalOnly` flag; the pipeline still feeds `MicSleepSignalAggregator` for stage estimation, but `commitEvent` early-returns before any encoding or per-event Room write. Enables mic-based staging with zero audio retention.
 
 ### 13. Auto-start mic-staging when toggle is on
 
 - **What**: When `mic_for_staging_enabled` is true and a sleep tracking session begins, automatically also start the recorder in signal-only mode. Currently the user has to remember to start both.
 - **Why**: One toggle, one user expectation.
 - **Acceptance**: Starting `SleepTrackingService` while the toggle is on results in mic-based stage estimates with no extra user action.
-- **Status**: Open.
+- **Status**: **Fixed**. `SleepTrackingService.startTracking` now reads `micForStagingEnabledFlow` and, when on and `RECORD_AUDIO` is granted, auto-starts `AudioRecorderService` with `ACTION_START_SIGNAL_ONLY` (#12); `stopTracking` pairs it with `ACTION_STOP`. One toggle, both services.
 
 ---
 
@@ -179,7 +179,7 @@ Each entry has a fixed shape:
 - **Why**: We promised "lighter app" as a goal; need to verify Firebase doesn't blow that up.
 - **Acceptance**: APK size delta vs baseline documented in `docs/architecture.md`. R8 ProGuard rules updated if Firebase strips too aggressively.
 - **Notes**: Expect ~3–4 MB increase from Firebase Auth + Firestore + Play Services Auth. ProGuard rules from each library are auto-included via their AAR consumer rules.
-- **Status**: Open.
+- **Status**: **Fixed**. Measured a full `assembleRelease` (R8 + resource shrinking, JDK 17): **3.38 MB** unsigned release APK vs 23.09 MB debug (~85% smaller). DEX-dominated (`classes.dex` 2.80 MB; resources.arsc 0.30 MB; native libs 0.06 MB) — the on-device-first design means code, not assets, drives size. Firebase/HC/WorkManager land within the ~3–4 MB estimate and needed **no** extra ProGuard keeps (AAR consumer rules sufficed; release builds clean). Delta + composition table documented in `docs/architecture.md` §5.1. (No pre-Firebase APK exists in the offline env for a direct historical diff.)
 
 ### 16. Automated test suite
 
@@ -204,7 +204,35 @@ Each entry has a fixed shape:
   - `SleepStageEstimatorFactoryTest` — vendor priority, motion-only, mic-only, empty fallback
   - `audio/classification/SpectralClassifierTest` — silence / cough / snore / talk / noise / unknown
   - `audio/isolation/VoiceMatcherTest` — factory wiring, matching/mismatch, empty profile
-  Still pending: `WearableSyncManager`, `HealthConnectSource`, `AlarmScheduler.calculateNextTriggerTime` (private — needs extraction), Compose UI tests.
+
+  Second batch landed (3 test classes, 24 cases) — required small testability refactors:
+  - `AlarmTimeCalculatorTest` (9) — extracted the day-of-week / rollover / wake-window logic out of
+    `AlarmScheduler.calculateNextScheduledTime` into a pure, clock-injectable `AlarmTimeCalculator`;
+    covers weekday selection, next-occurrence rollover, wake-window subtraction, and **DST**
+    spring-forward (loses an hour) / fall-back (gains an hour) while preserving the wall-clock alarm.
+  - `WearableSyncManagerTest` (10) — extracted `collectFromSource` + `mergeSyncedSources` into the
+    companion (pure w.r.t. persistence); covers empty source list, permission-denied, permission /
+    listDevices / syncSince partial failures, sessionId stamping, device inference, and device dedupe.
+  - `HealthConnectStageMapperTest` (5) — extracted `HealthConnectSource.mapSleepStage` into a pure
+    `HealthConnectStageMapper`; covers awake / light-collapse / deep / rem / out-of-bed drop / unknown fallback.
+
+  Third batch landed (4 test classes, 21 cases) — direct coverage for every `SleepStageEstimator`
+  implementation (previously only exercised indirectly via `SleepStageEstimatorFactoryTest`), all pure
+  JVM (no instrumentation). Cycle bias is made deterministic by driving `nowMs` with a null profile
+  (92-min cycle) so `SleepCyclePredictor.typicalStageBias` is known:
+  - `MotionOnlySleepStageEstimatorTest` (6) — variance thresholds (awake / light / deep), very-low-variance
+    REM in the cycle tail, cycle-bias fall-through, not-enough-data guard, and confidence bounds.
+  - `MultiSignalSleepStageEstimatorTest` (5) — DEEP / REM / AWAKE / LIGHT biomarker scoring (HR/HRV/resp/motion
+    with a pinned `restingHeartRateBpm` baseline), degrade-to-fallback when no wearable signal, confidence
+    bounds + non-null secondGuess.
+  - `MicSleepStageEstimatorTest` (6) — DEEP / REM / AWAKE / LIGHT from mic features, degrade-to-fallback when
+    the mic aggregate is absent, and `windowSampleCount` confidence weighting.
+  - `VendorSleepStageEstimatorTest` (4) — covering-segment hit at 0.92 confidence, half-open `[start, end)`
+    boundary (now == endMs picks the next segment), and fallback when no segment covers now / segments empty.
+
+  Suite now **85 green** (JDK 17 / `testDebugUnitTest`).
+
+  Still pending: Compose UI tests (need instrumentation / Robolectric tooling not yet configured).
 
 ---
 
@@ -221,14 +249,17 @@ Each entry has a fixed shape:
   - ADR-006: Why the audio pipeline uses pooled FFT buffers
 - **Why**: Onboarding new contributors / future-us.
 - **Acceptance**: Six ADRs, each ≤ 1 page, follow the standard "context / decision / consequences" template.
-- **Status**: Open.
+- **Status**: **Done**. All six ADRs written under `docs/adr/` (0001–0006) plus a `README.md` index and
+  `_template.md`, each ≤ 1 page in context/decision/consequences form and grounded in the shipped code
+  (`SleepStageEstimatorFactory`, `SyncRepository`/`AuthRepository`, `HealthConnectSource`/`WearableSource`,
+  `FftProcessor`). Cross-linked to the relevant backlog items.
 
 ### 18. End-user privacy notice
 
 - **What**: A short user-facing privacy notice rendered inside the app (Settings → Privacy) that explains in plain language exactly what stays on device, what syncs to Firebase, and how to request export/deletion.
 - **Why**: Required for India DPDPA and good practice everywhere.
 - **Acceptance**: One-screen markdown rendered in the app; linked from the cloud-sync toggle copy.
-- **Status**: Open.
+- **Status**: **Fixed**. Added a `Privacy` route + `ui/settings/PrivacyScreen` — a plain-language, on-device notice covering what stays local (raw audio, accelerometer, on-device stage estimation), what syncs to Firebase only with cloud-sync opted in, the "raw audio never leaves the device" guarantee, Health Connect read scope, and how to request export/deletion. Reached via a "Privacy" row in Settings.
 
 ---
 
@@ -299,6 +330,45 @@ Each entry has a fixed shape:
 
 ## Changelog
 
+- 2026-07-11 Feature batch (**#7 partial, #11, #12, #13, #18**). Landed the buildable remainder of the
+  backlog, each with a pure unit-tested core plus thin Android glue; JVM suite now **103 green** (JDK 17,
+  `testDebugUnitTest`, +7 from `HealthContextInsightsTest`, +11 from the earlier `BedtimeDetectorTest`).
+  - **#11 Bedtime auto-detect**: pure clock-injected `sleep/BedtimeDetector` state machine (conservative;
+    resets on any violation, latches once per quiet window) + `BedtimeDetectorTest` (11); thin
+    `service/BedtimeDetectionService` inserts a real session and starts `SleepTrackingService` on trigger;
+    opt-in Settings toggle (`bedtimeAutoDetectEnabled`, default off) + `BootReceiver` restart.
+  - **#12 Signal-only recorder**: `AudioRecorderService.ACTION_START_SIGNAL_ONLY` runs the pipeline to
+    `MicSleepSignalAggregator` only — `commitEvent` early-returns before any encoding or Room write.
+  - **#13 Auto-start mic-staging**: `SleepTrackingService` auto-starts/stops the signal-only recorder when
+    `micForStagingEnabled` is on and `RECORD_AUDIO` is granted.
+  - **#7 (partial) Health Connect detailed context**: added `CAFFEINE`/`HYDRATION`/`BODY_TEMPERATURE`
+    metrics + `HealthConnectSource.detailedContextPermissions()` (kept out of the base required set to
+    avoid `hasPermissions()` regressions); pure `wearables/HealthContextInsights` (+7 tests) surfaces
+    informational notes in a new "Health context" card on the Sleep Result screen (no fabricated score
+    deltas); gated behind a "Detailed health context" opt-in toggle and `WearableSyncManager.effectiveMetrics()`.
+    Blood pressure / CGM / menstrual sub-metrics deferred (sensitive + clinically speculative scoring).
+  - **#18 Privacy notice**: `ui/settings/PrivacyScreen` (on-device vs cloud, raw-audio guarantee, HC scope,
+    export/delete) reached from a Settings "Privacy" row.
+
+- 2026-07-10 Documentation (**#17**). Added `docs/adr/` with six Architecture Decision Records
+  (0001 Strategy+Factory estimators, 0002 on-device-first + opt-in cloud, 0003 Health Connect as
+  primary wearable source, 0004 Firebase auth, 0005 never-sync-raw-audio, 0006 pooled FFT buffers),
+  each ≤ 1 page in context/decision/consequences form and grounded in the shipped code, plus a
+  `README.md` index and reusable `_template.md`. No code changed.
+- 2026-07-10 Test-suite third wave (**#16**). Added direct unit coverage for all four
+  `SleepStageEstimator` implementations (21 cases; suite now 85 green, JDK 17 / `testDebugUnitTest`) —
+  previously only tested indirectly through `SleepStageEstimatorFactoryTest`. `MotionOnly` (variance
+  thresholds, cycle-tail REM, bias fall-through, no-data guard), `MultiSignal` (DEEP/REM/AWAKE/LIGHT
+  biomarker scoring + degrade-to-fallback), `Mic` (per-stage mic-feature scoring + sample-count
+  confidence weighting), and `Vendor` (segment hit at 0.92, half-open boundary, fallback). Tests keep
+  cycle bias deterministic by driving `nowMs` with a null profile (92-min cycle); no production code
+  changed. Only Compose UI tests remain outstanding on #16.
+- 2026-07-10 Test-suite second wave (**#16**) + repo hygiene. Extracted three pure, unit-testable
+  units without behavior change and added 24 cases (suite now 64 green, JDK 17 / `testDebugUnitTest`):
+  `AlarmTimeCalculator` (clock-injectable next-trigger incl. DST), `WearableSyncManager.collectFromSource`
+  + `mergeSyncedSources` (per-source IO + merge/dedupe, resilient to partial source failure), and
+  `HealthConnectStageMapper` (HC stage-int → `SleepStage`). Also removed an accidentally-committed
+  Kotlin incremental-compile log (`.kotlin/errors/*.log`) and added `.kotlin/` to `.gitignore`.
 - 2026-05-27 Issue fixes completion: **#9** profile-driven scoring weights — extracted `SleepQualityScorer` as a pure object that adapts deep-sleep target and ideal duration range to `UserProfile.activityLevel`; **#10** smart-wake snooze logic — `Constants.EXTRA_ORIGINAL_TARGET_MS` threaded through `AlarmReceiver` / `SmartWakeService` → `AlarmPlaybackService` so snooze anchors to `max(originalTarget, now) + snoozeMinutes` instead of always `now + snoozeMinutes`; **#16** first wave of automated unit tests (~35 cases across `SmartWakeAnalyzer`, `SleepQualityScorer`, `SleepCyclePredictor`, `SleepStageEstimatorFactory`, `SpectralClassifier`, `VoiceMatcher`).
 - 2026-05-26 Implemented backlog: **#19** (voice enrollment dispatcher), **#20** (wearables HC button + Open-Health-Connect escape hatch + safe intents), **#23** (programs seeded from `SleepAnalyzerApp` gated by `programsSeededFlow`), **#24** (auto-resume start after permission grant in Recorder/Tracker, all 5 services migrated to `ServiceCompat.startForeground` with typed flag, user-facing toasts on every start/stop), **#25** (defensive `if (samples.isEmpty()) return` inside `HeartRateCard`), **#26** (`MediaPlayer.release()` now guaranteed in recorder playback). All fixes verified by `assembleDebug`.
 - 2026-05-26 #22 fixed: removed `google-services` Gradle plugin (Firebase auto-init via placeholder config was killing the process on launch); added `SleepAnalyzerApp` with a default uncaught-exception handler that writes full stack traces to `filesDir/crash_log/last_crash.txt`; hardened `MainActivity.onCreate` with `runCatching` around DataStore, WorkManager, and CloudSyncScheduler calls.

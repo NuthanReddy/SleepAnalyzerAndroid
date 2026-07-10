@@ -6,6 +6,9 @@ import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.records.HeartRateVariabilityRmssdRecord
 import androidx.health.connect.client.records.HeightRecord
+import androidx.health.connect.client.records.BodyTemperatureRecord
+import androidx.health.connect.client.records.HydrationRecord
+import androidx.health.connect.client.records.NutritionRecord
 import androidx.health.connect.client.records.OxygenSaturationRecord
 import androidx.health.connect.client.records.RespiratoryRateRecord
 import androidx.health.connect.client.records.RestingHeartRateRecord
@@ -18,7 +21,6 @@ import androidx.health.connect.client.time.TimeRangeFilter
 import tech.future.sleepanalyzer.data.db.entity.WearableDevice
 import tech.future.sleepanalyzer.data.db.entity.WearableSample
 import tech.future.sleepanalyzer.data.db.entity.WearableSleepStage
-import tech.future.sleepanalyzer.sleep.SleepStage
 import java.time.Instant
 
 /**
@@ -66,6 +68,18 @@ class HealthConnectSource(private val context: Context) : WearableSource {
         val granted = try { c.permissionController.getGrantedPermissions() } catch (_: Throwable) { return false }
         return granted.containsAll(requiredPermissions())
     }
+
+    /**
+     * Extra permissions for the opt-in "Detailed health context" feature (#7). Kept separate from
+     * [requiredPermissions] so a user who only granted the core wearable set still passes
+     * [hasPermissions] and keeps syncing — the detailed reads simply no-op (they are wrapped in
+     * runCatching) until these are granted.
+     */
+    fun detailedContextPermissions(): Set<String> = setOf(
+        HealthPermission.getReadPermission(BodyTemperatureRecord::class),
+        HealthPermission.getReadPermission(HydrationRecord::class),
+        HealthPermission.getReadPermission(NutritionRecord::class)
+    )
 
     override suspend fun listDevices(): List<WearableDevice> {
         // Health Connect doesn't expose a device list directly; surface a single virtual device
@@ -185,6 +199,53 @@ class HealthConnectSource(private val context: Context) : WearableSource {
                 }
             }
         }
+        // --- Detailed health context (#7): opt-in metrics. Reads no-op without their permissions. ---
+        if (WearableMetric.BODY_TEMPERATURE in metrics) {
+            runCatching {
+                val resp = c.readRecords(ReadRecordsRequest(BodyTemperatureRecord::class, range))
+                resp.records.forEach { r ->
+                    out += WearableSample(
+                        timestamp = r.time.toEpochMilli(),
+                        metric = WearableMetric.BODY_TEMPERATURE.name,
+                        value = r.temperature.inCelsius.toFloat(),
+                        unit = WearableMetric.BODY_TEMPERATURE.unit,
+                        deviceId = deviceIdOf(r.metadata),
+                        sourceProvider = provider
+                    )
+                }
+            }
+        }
+        if (WearableMetric.HYDRATION in metrics) {
+            runCatching {
+                val resp = c.readRecords(ReadRecordsRequest(HydrationRecord::class, range))
+                resp.records.forEach { r ->
+                    out += WearableSample(
+                        timestamp = r.endTime.toEpochMilli(),
+                        metric = WearableMetric.HYDRATION.name,
+                        value = r.volume.inMilliliters.toFloat(),
+                        unit = WearableMetric.HYDRATION.unit,
+                        deviceId = deviceIdOf(r.metadata),
+                        sourceProvider = provider
+                    )
+                }
+            }
+        }
+        if (WearableMetric.CAFFEINE in metrics) {
+            runCatching {
+                val resp = c.readRecords(ReadRecordsRequest(NutritionRecord::class, range))
+                resp.records.forEach { r ->
+                    val caffeineMg = r.caffeine?.inGrams?.times(1000.0) ?: return@forEach
+                    out += WearableSample(
+                        timestamp = r.endTime.toEpochMilli(),
+                        metric = WearableMetric.CAFFEINE.name,
+                        value = caffeineMg.toFloat(),
+                        unit = WearableMetric.CAFFEINE.unit,
+                        deviceId = deviceIdOf(r.metadata),
+                        sourceProvider = provider
+                    )
+                }
+            }
+        }
         return out
     }
 
@@ -222,7 +283,7 @@ class HealthConnectSource(private val context: Context) : WearableSource {
         response.records.flatMap { record ->
             val deviceId = "health_connect:${record.metadata.dataOrigin.packageName}"
             record.stages.orEmpty().mapNotNull { stage ->
-                val mappedStage = mapSleepStage(stage.stage) ?: return@mapNotNull null
+                val mappedStage = HealthConnectStageMapper.map(stage.stage) ?: return@mapNotNull null
                 val startMs = stage.startTime.toEpochMilli()
                 val endMs = stage.endTime.toEpochMilli()
                 if (endMs <= startMs) return@mapNotNull null
@@ -241,20 +302,6 @@ class HealthConnectSource(private val context: Context) : WearableSource {
         Instant.ofEpochMilli(sinceMs.coerceAtLeast(0)),
         Instant.ofEpochMilli(untilMs.coerceAtLeast(sinceMs + 1))
     )
-
-    private fun mapSleepStage(stageType: Int): SleepStage? = when (stageType) {
-        SleepSessionRecord.STAGE_TYPE_AWAKE,
-        SleepSessionRecord.STAGE_TYPE_AWAKE_IN_BED -> SleepStage.AWAKE
-
-        SleepSessionRecord.STAGE_TYPE_SLEEPING,
-        SleepSessionRecord.STAGE_TYPE_LIGHT,
-        SleepSessionRecord.STAGE_TYPE_UNKNOWN -> SleepStage.LIGHT
-
-        SleepSessionRecord.STAGE_TYPE_DEEP -> SleepStage.DEEP
-        SleepSessionRecord.STAGE_TYPE_REM -> SleepStage.REM
-        SleepSessionRecord.STAGE_TYPE_OUT_OF_BED -> null
-        else -> SleepStage.LIGHT
-    }
 
     private fun deviceIdOf(metadata: Metadata): String {
         val pkg = metadata.dataOrigin.packageName

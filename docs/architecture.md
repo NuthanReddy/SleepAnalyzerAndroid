@@ -210,6 +210,41 @@ Why this layout:
 - DataStore Preferences instead of SharedPreferences (smaller surface, lifecycle-safe).
 - Audio buffer storage uses `ShortRingBuffer` so the last 30 seconds of capture are always recoverable without writing every frame to disk.
 
+### 5.1 Release APK size (measured under R8)
+
+Measured with a full `assembleRelease` (R8 code shrink + `isShrinkResources`), JDK 17 / AGP 8.7.3,
+after all Firebase, Health Connect, WorkManager, and audio additions:
+
+| Build | APK | Size |
+| --- | --- | --- |
+| Release (R8, minified + resources shrunk) | `app-release-unsigned.apk` | **3.38 MB** |
+| Debug (no minify, no shrink) | `app-debug.apk` | 23.09 MB |
+
+R8 removes ~85% of the debug footprint. Composition of the 3.38 MB release APK (compressed):
+
+| Component | Size | Notes |
+| --- | --- | --- |
+| `classes.dex` (all app + library code) | 2.80 MB | Firebase, Health Connect, WorkManager, Compose, audio DSP — all shrunk into one dex |
+| `resources.arsc` | 0.30 MB | |
+| Native libs (`lib/*.so`) | 0.06 MB | tiny — no bundled DSP/native libraries |
+| `res/` (bundled resources) | 0.05 MB | after resource shrinking |
+| Assets + META-INF + other | ~0.08 MB | |
+
+Takeaways:
+- The APK is dominated by DEX (code), not assets or native code — expected given the on-device-first
+  design (all FFT/feature/classification code is hand-rolled Kotlin, no third-party DSP `.so`s).
+- Firebase Auth + Firestore + Play Services Auth land within the earlier ~3–4 MB estimate; R8 keeps the
+  total under 3.5 MB, so the "lighter app" goal holds after the cloud additions.
+- No extra `proguard-rules.pro` keeps were required for the new features — each library's AAR consumer
+  ProGuard rules were sufficient (the release build runs clean and the shrunk resource/`classes.dex`
+  output is valid).
+- Baseline caveat: this offline environment has no pre-Firebase APK artifact to diff against directly, so
+  the "vs baseline" comparison is the debug→release delta above plus the documented Firebase estimate,
+  not a rebuilt historical APK.
+- Reproduce with `./gradlew --offline assembleRelease -x lintVitalAnalyzeRelease -x lintVitalRelease`
+  (the two lint tasks are skipped only because `lint-gradle` isn't in the offline cache; they are not
+  required to produce or measure the APK).
+
 ## 6. Modules and Package Map
 
 ```
@@ -1144,6 +1179,12 @@ flowchart TD
 - Phone numbers are treated as PII; the app only logs masked/DEBUG-only verification traces and never syncs raw SMS content.
 
 ## Changelog
+
+- 2026-07-11 APK size measured under R8 (**backlog #15**). Full `assembleRelease` (R8 + resource
+  shrinking, JDK 17 / AGP 8.7.3) produces a **3.38 MB** unsigned release APK vs a 23.09 MB debug APK
+  (~85% reduction). Composition is DEX-dominated (`classes.dex` 2.80 MB; resources.arsc 0.30 MB; native
+  libs only 0.06 MB). Firebase/Health Connect/WorkManager additions stay within the earlier ~3–4 MB
+  estimate and needed no extra ProGuard keeps. Documented in §5.1. No production code changed.
 
 - 2026-05-26 Firebase auth + optional cloud sync + data-rights flows + Health Connect autofill landed: added Firebase Auth/Firestore build wiring (with a placeholder `google-services.json` for safe guest-mode builds), introduced `user_account` persistence + sync worker/scheduler infrastructure, added phone OTP + Google + guest signup surfaces in onboarding/settings/standalone auth UI, added export/delete request documents under `/data_requests/{requestId}`, and added Health Connect height/weight autofill in onboarding/profile editing while keeping raw audio strictly local.
 

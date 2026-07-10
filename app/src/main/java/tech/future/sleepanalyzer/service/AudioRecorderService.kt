@@ -67,8 +67,18 @@ class AudioRecorderService : Service() {
     private var lastVoiceEndMs: Long? = null
     private var silenceStartMs: Long? = null
 
+    /**
+     * Signal-only mode (#12): runs the analysis pipeline far enough to feed
+     * [MicSleepSignalAggregator] for stage estimation, but never encodes audio files or writes
+     * [AudioRecording] rows. Used by the mic-for-staging path so users get mic-based stage
+     * estimates without producing a snore/talk review library.
+     */
+    @Volatile
+    private var signalOnly = false
+
     companion object {
         const val ACTION_START = "start_recording"
+        const val ACTION_START_SIGNAL_ONLY = "start_recording_signal_only"
         const val ACTION_STOP = "stop_recording"
 
         private const val SILENCE_COMMIT_GAP_MS = 800L
@@ -99,21 +109,23 @@ class AudioRecorderService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START -> startRecording()
+            ACTION_START -> startRecording(signalOnly = false)
+            ACTION_START_SIGNAL_ONLY -> startRecording(signalOnly = true)
             ACTION_STOP -> stopRecording()
         }
         return START_STICKY
     }
 
-    private fun startRecording() {
+    private fun startRecording(signalOnly: Boolean) {
         if (isActive) return
         if (!PermissionsUtil.isRecordAudioGranted(this)) {
             stopSelf()
             return
         }
 
+        this.signalOnly = signalOnly
         createNotificationChannel()
-        startForegroundRecorder()
+        startForegroundRecorder(signalOnly)
         acquireWakeLock()
         resetVoiceState()
         micAggregator.reset()
@@ -256,6 +268,10 @@ class AudioRecorderService : Service() {
 
         micAggregator.onEvent(classification.type)
 
+        // Signal-only mode (#12): the classification has now fed the staging aggregator; stop here
+        // so we never attribute, encode, or persist audio.
+        if (signalOnly) return
+
         val attribution = when (classification.type) {
             AudioEventType.SNORE,
             AudioEventType.TALK -> voiceMatcher.match(featureVec)
@@ -329,6 +345,7 @@ class AudioRecorderService : Service() {
 
     private fun shutdownRecorder() {
         aggregatorRef = null
+        signalOnly = false
         rolloverJob?.cancel()
         rolloverJob = null
         pipeline?.stop()
@@ -350,8 +367,9 @@ class AudioRecorderService : Service() {
         }
     }
 
-    private fun startForegroundRecorder() {
-        val notification = createNotification("Recording sleep audio...")
+    private fun startForegroundRecorder(signalOnly: Boolean) {
+        val text = if (signalOnly) "Analyzing sleep sounds..." else "Recording sleep audio..."
+        val notification = createNotification(text)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 Constants.AUDIO_RECORDING_NOTIFICATION_ID,

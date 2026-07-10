@@ -16,17 +16,21 @@ import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import tech.future.sleepanalyzer.MainActivity
 import tech.future.sleepanalyzer.R
 import tech.future.sleepanalyzer.data.repository.SleepRepository
+import tech.future.sleepanalyzer.di.ServiceLocator
 import tech.future.sleepanalyzer.util.Constants
+import tech.future.sleepanalyzer.util.PermissionsUtil
 import kotlin.math.sqrt
 
 class SleepTrackingService : Service(), SensorEventListener {
@@ -55,6 +59,9 @@ class SleepTrackingService : Service(), SensorEventListener {
     private var lastStageCheckTime = 0L
     private val gravity = FloatArray(3)
 
+    /** True when this service auto-started the recorder in signal-only mode (#13), so stop pairs it. */
+    private var startedRecorderForStaging = false
+
     companion object {
         const val ACTION_START = "start_tracking"
         const val ACTION_STOP = "stop_tracking"
@@ -68,6 +75,7 @@ class SleepTrackingService : Service(), SensorEventListener {
 
     override fun onCreate() {
         super.onCreate()
+        ServiceLocator.initialize(applicationContext)
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         repository = SleepRepository(applicationContext)
     }
@@ -144,6 +152,27 @@ class SleepTrackingService : Service(), SensorEventListener {
                 runCatching { syncManager.syncIncremental() }
             }
         }
+
+        // #13: when "use mic for staging" is enabled, also run the recorder in signal-only mode so
+        // the user gets mic-based stage estimates without starting the recorder by hand. Best-effort:
+        // requires RECORD_AUDIO; failures are swallowed since mic staging is optional.
+        serviceScope.launch {
+            val enabled = runCatching {
+                ServiceLocator.preferences.micForStagingEnabledFlow.first()
+            }.getOrDefault(false)
+            if (enabled && isTracking &&
+                PermissionsUtil.isRecordAudioGranted(this@SleepTrackingService)
+            ) {
+                startedRecorderForStaging = true
+                runCatching {
+                    val recorderIntent = Intent(
+                        this@SleepTrackingService,
+                        AudioRecorderService::class.java
+                    ).setAction(AudioRecorderService.ACTION_START_SIGNAL_ONLY)
+                    ContextCompat.startForegroundService(this@SleepTrackingService, recorderIntent)
+                }
+            }
+        }
     }
 
     private fun stopTracking() {
@@ -158,6 +187,16 @@ class SleepTrackingService : Service(), SensorEventListener {
         sensorManager.unregisterListener(this)
         wakeLock?.takeIf { it.isHeld }?.release()
         wakeLock = null
+
+        // #13: pair down the signal-only recorder if we started it.
+        if (startedRecorderForStaging) {
+            startedRecorderForStaging = false
+            runCatching {
+                val recorderIntent = Intent(this, AudioRecorderService::class.java)
+                    .setAction(AudioRecorderService.ACTION_STOP)
+                startService(recorderIntent)
+            }
+        }
 
         val endTime = System.currentTimeMillis()
         val durationSec = ((endTime - startTime) / 1000L).coerceAtLeast(0L)
