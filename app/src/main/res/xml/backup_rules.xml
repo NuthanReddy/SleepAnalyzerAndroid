@@ -6,8 +6,11 @@
    See https://developer.android.com/about/versions/12/backup-restore
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <!-- Persist the Room database and user preferences so sleep history, notes,
+         goals, and profile survive an app reinstall via Android Auto Backup.
+         Large per-device audio captures are excluded to stay under the 25MB quota. -->
+    <include domain="database" path="." />
+    <include domain="sharedpref" path="." />
+    <include domain="file" path="datastore/" />
+    <exclude domain="file" path="recordings/" />
 </full-backup-content>

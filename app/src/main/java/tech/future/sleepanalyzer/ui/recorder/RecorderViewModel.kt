@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import tech.future.sleepanalyzer.audio.Attribution
 import tech.future.sleepanalyzer.audio.AudioEventType
@@ -26,6 +27,12 @@ data class RecordingAttributionStats(
     val unknownCount: Int = 0
 )
 
+data class RecordingSession(
+    val key: Long,
+    val title: String,
+    val recordings: List<AudioRecording>
+)
+
 class RecorderViewModel(application: Application) : AndroidViewModel(application) {
     private val repository: SleepRepository = ServiceLocator.run {
         initialize(application)
@@ -38,6 +45,21 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
     val isRecording: StateFlow<Boolean> = _isRecording
 
     val recentRecordings: StateFlow<List<AudioRecording>> = repository.getRecentRecordings(50)
+        .stateIn(viewModelScope, sharing, emptyList())
+
+    private val sessionDateFormat = java.text.SimpleDateFormat("EEE, MMM d · h:mm a", java.util.Locale.getDefault())
+
+    /** Recordings grouped into sessions (by sessionId, falling back to date), newest first. */
+    val recordingSessions: StateFlow<List<RecordingSession>> = recentRecordings
+        .map { list ->
+            list.groupBy { it.sessionId ?: -it.date.hashCode().toLong() }
+                .map { (key, items) ->
+                    val sorted = items.sortedBy { it.startTime }
+                    val header = sorted.firstOrNull()?.let { sessionDateFormat.format(java.util.Date(it.startTime)) } ?: ""
+                    RecordingSession(key = key, title = header, recordings = sorted)
+                }
+                .sortedByDescending { it.recordings.firstOrNull()?.startTime ?: 0L }
+        }
         .stateIn(viewModelScope, sharing, emptyList())
 
     val voiceIsolationEnabled = preferences.voiceIsolationEnabledFlow
@@ -61,6 +83,10 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
 
     private val _playingRecordingId = MutableStateFlow<Long?>(null)
     val playingRecordingId: StateFlow<Long?> = _playingRecordingId
+
+    /** Per-recording transcription progress/errors, keyed by recording id. */
+    private val _transcriptionState = MutableStateFlow<Map<Long, TranscriptionUiState>>(emptyMap())
+    val transcriptionState: StateFlow<Map<Long, TranscriptionUiState>> = _transcriptionState
 
     private var mediaPlayer: MediaPlayer? = null
 
@@ -117,10 +143,39 @@ class RecorderViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    /**
+     * Runs offline speech-to-text on a "talk" recording and persists the transcript. The Vosk model
+     * downloads on first use (~40 MB), so this may take a while the very first time.
+     */
+    fun transcribe(recording: AudioRecording) {
+        val id = recording.id
+        if (_transcriptionState.value[id] == TranscriptionUiState.Running) return
+        _transcriptionState.update { it + (id to TranscriptionUiState.Running) }
+        viewModelScope.launch {
+            try {
+                val text = tech.future.sleepanalyzer.transcription.VoskTranscriber
+                    .transcribe(getApplication(), recording.filePath)
+                val stored = if (text.isBlank()) "" else text
+                repository.updateRecordingTranscript(id, stored)
+                _transcriptionState.update { it + (id to TranscriptionUiState.Done) }
+            } catch (t: Throwable) {
+                _transcriptionState.update {
+                    it + (id to TranscriptionUiState.Error(t.message ?: "Transcription failed"))
+                }
+            }
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
         mediaPlayer?.release()
     }
+}
+
+sealed interface TranscriptionUiState {
+    data object Running : TranscriptionUiState
+    data object Done : TranscriptionUiState
+    data class Error(val message: String) : TranscriptionUiState
 }
 
 private fun List<AudioRecording>.attributionStatsFor(type: AudioEventType): RecordingAttributionStats {

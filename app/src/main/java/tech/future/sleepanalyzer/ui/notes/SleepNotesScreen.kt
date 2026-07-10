@@ -38,6 +38,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import tech.future.sleepanalyzer.data.db.entity.AudioRecording
 import tech.future.sleepanalyzer.data.db.entity.SleepNote
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -48,6 +49,7 @@ fun SleepNotesScreen(
     viewModel: NotesViewModel = viewModel()
 ) {
     val notes by viewModel.allNotes.collectAsStateWithLifecycle()
+    val transcripts by viewModel.transcripts.collectAsStateWithLifecycle()
     val showAdd by viewModel.showAddDialog.collectAsStateWithLifecycle()
 
     Scaffold(
@@ -76,7 +78,7 @@ fun SleepNotesScreen(
             )
             Spacer(modifier = Modifier.height(16.dp))
 
-            if (notes.isEmpty()) {
+            if (notes.isEmpty() && transcripts.isEmpty()) {
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
@@ -97,6 +99,27 @@ fun SleepNotesScreen(
                 }
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (transcripts.isNotEmpty()) {
+                        item(key = "transcripts_header") {
+                            Text(
+                                text = "Voice transcripts",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                        }
+                        items(transcripts, key = { "t_${it.id}" }) { rec ->
+                            TranscriptCard(rec)
+                        }
+                        item(key = "notes_header") {
+                            Text(
+                                text = "Notes",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(top = 12.dp)
+                            )
+                        }
+                    }
                     items(notes, key = { it.id }) { note ->
                         NoteCard(note = note, viewModel = viewModel)
                     }
@@ -164,6 +187,32 @@ fun NoteCard(note: SleepNote, viewModel: NotesViewModel) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(text = note.note, style = MaterialTheme.typography.bodyMedium)
             }
+        }
+    }
+}
+
+@Composable
+private fun TranscriptCard(recording: AudioRecording) {
+    val dateFormat = remember { SimpleDateFormat("MMM d · HH:mm", Locale.getDefault()) }
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("💬", style = MaterialTheme.typography.titleMedium)
+                Spacer(modifier = Modifier.size(8.dp))
+                Text(
+                    text = dateFormat.format(Date(recording.startTime)),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "\u201C${recording.transcript}\u201D",
+                style = MaterialTheme.typography.bodyMedium
+            )
         }
     }
 }

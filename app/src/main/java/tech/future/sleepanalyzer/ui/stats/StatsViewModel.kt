@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.*
 import tech.future.sleepanalyzer.data.db.entity.SleepSession
 import tech.future.sleepanalyzer.data.repository.SleepRepository
+import tech.future.sleepanalyzer.wearables.WearableMetric
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -20,11 +21,24 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
         val cal = Calendar.getInstance()
         val end = dateFormat.format(cal.time)
         when (_timeRange.value) {
+            "day" -> cal.add(Calendar.DAY_OF_YEAR, -1)
             "week" -> cal.add(Calendar.DAY_OF_YEAR, -7)
             "month" -> cal.add(Calendar.MONTH, -1)
             "all" -> cal.add(Calendar.YEAR, -10)
         }
         return dateFormat.format(cal.time) to end
+    }
+
+    private fun getMillisRange(): Pair<Long, Long> {
+        val end = System.currentTimeMillis()
+        val cal = Calendar.getInstance()
+        when (_timeRange.value) {
+            "day" -> cal.add(Calendar.DAY_OF_YEAR, -1)
+            "week" -> cal.add(Calendar.DAY_OF_YEAR, -7)
+            "month" -> cal.add(Calendar.MONTH, -1)
+            "all" -> cal.add(Calendar.YEAR, -10)
+        }
+        return cal.timeInMillis to end
     }
 
     val sessions: StateFlow<List<SleepSession>> = _timeRange.flatMapLatest { _ ->
@@ -62,4 +76,27 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
         if (list.isEmpty()) 0f
         else list.map { it.interruptions }.average().toFloat()
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0f)
+
+    // Walking steps pulled from wearables / Health Connect, aggregated over the selected range.
+    val stepsStats: StateFlow<StepsStats> = _timeRange.mapLatest {
+        val (startMs, endMs) = getMillisRange()
+        val samples = repository.getWearableSamplesInRange(startMs, endMs, WearableMetric.STEPS.name)
+        if (samples.isEmpty()) {
+            StepsStats()
+        } else {
+            val total = samples.sumOf { it.value.toLong() }
+            val daysWithData = samples.map { dateFormat.format(Date(it.timestamp)) }.distinct().size
+            StepsStats(
+                total = total,
+                dailyAverage = if (daysWithData > 0) (total / daysWithData).toInt() else 0,
+                daysWithData = daysWithData
+            )
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), StepsStats())
 }
+
+data class StepsStats(
+    val total: Long = 0L,
+    val dailyAverage: Int = 0,
+    val daysWithData: Int = 0
+)

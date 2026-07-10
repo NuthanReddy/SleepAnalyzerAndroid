@@ -39,7 +39,7 @@ import tech.future.sleepanalyzer.ui.alarm.AlarmScreen
 import tech.future.sleepanalyzer.ui.auth.SignupScreen
 import tech.future.sleepanalyzer.ui.games.AlertnessGameScreen
 import tech.future.sleepanalyzer.ui.goals.SleepGoalScreen
-import tech.future.sleepanalyzer.ui.home.HomeScreen
+import tech.future.sleepanalyzer.ui.more.MoreOptionsScreen
 import tech.future.sleepanalyzer.ui.more.MoreScreen
 import tech.future.sleepanalyzer.ui.navigation.Screen
 import tech.future.sleepanalyzer.ui.notes.SleepNotesScreen
@@ -76,7 +76,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             SleepAnalyzerTheme {
                 SleepAnalyzerApp(
-                    startDestination = if (setupCompleted) Screen.Home.route else Screen.Onboarding.route,
+                    startDestination = if (setupCompleted) Screen.Track.route else Screen.Onboarding.route,
                     initialDestination = initialDestination,
                     initialAlarmId = initialAlarmId,
                     onSignedIn = {
@@ -107,7 +107,7 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun SleepAnalyzerApp(
-    startDestination: String = Screen.Home.route,
+    startDestination: String = Screen.Track.route,
     initialDestination: String? = null,
     initialAlarmId: Long = -1L,
     onSignedIn: () -> Unit = {},
@@ -158,7 +158,7 @@ fun SleepAnalyzerApp(
                             selected = currentDestination?.hierarchy?.any { it.route == screen.route } == true,
                             onClick = {
                                 navController.navigate(screen.route) {
-                                    popUpTo(Screen.Home.route) {
+                                    popUpTo(Screen.Track.route) {
                                         saveState = true
                                     }
                                     launchSingleTop = true
@@ -179,7 +179,7 @@ fun SleepAnalyzerApp(
             composable(Screen.Onboarding.route) {
                 OnboardingScreen(
                     onComplete = {
-                        navController.navigate(Screen.Home.route) {
+                        navController.navigate(Screen.Track.route) {
                             popUpTo(Screen.Onboarding.route) { inclusive = true }
                         }
                     },
@@ -201,8 +201,8 @@ fun SleepAnalyzerApp(
                     onSignedOut = { goHome ->
                         onSignedOut()
                         if (goHome) {
-                            navController.navigate(Screen.Home.route) {
-                                popUpTo(Screen.Home.route) { inclusive = false }
+                            navController.navigate(Screen.Track.route) {
+                                popUpTo(Screen.Track.route) { inclusive = false }
                                 launchSingleTop = true
                             }
                         }
@@ -228,20 +228,14 @@ fun SleepAnalyzerApp(
                 )
             }
 
-            composable(Screen.Home.route) {
-                HomeScreen(
-                    onNavigateToStats = { navController.navigate(Screen.Stats.route) },
-                    onNavigateToTracker = { navController.navigate(Screen.Track.route) },
-                    onNavigateToSounds = { navController.navigate(Screen.Sounds.route) },
-                    onNavigateToRecorder = { navController.navigate(Screen.Recorder.route) }
-                )
-            }
-
             composable(Screen.Track.route) {
                 SleepTrackerScreen(
                     onNavigateToResult = { sessionId ->
                         navController.navigate(Screen.SleepResult.createRoute(sessionId))
-                    }
+                    },
+                    onNavigateToSounds = { navController.navigate(Screen.Sounds.route) },
+                    onNavigateToAlarm = { navController.navigate(Screen.Alarm.route) },
+                    onNavigateToRecorder = { navController.navigate(Screen.Recorder.route) }
                 )
             }
 
@@ -259,13 +253,23 @@ fun SleepAnalyzerApp(
 
             composable(Screen.More.route) {
                 MoreScreen(
-                    onNavigateToNotes = { navController.navigate(Screen.Notes.route) },
                     onNavigateToGoals = { navController.navigate(Screen.Goals.route) },
-                    onNavigateToPrograms = { navController.navigate(Screen.Programs.route) },
-                    onNavigateToGame = { navController.navigate(Screen.Game.route) },
-                    onNavigateToRecorder = { navController.navigate(Screen.Recorder.route) },
-                    onNavigateToStats = { navController.navigate(Screen.Stats.route) },
+                    onNavigateToSounds = { navController.navigate(Screen.Sounds.route) },
+                    onNavigateToAlarm = { navController.navigate(Screen.Alarm.route) },
+                    onNavigateToMoreOptions = { navController.navigate(Screen.MoreOptions.route) },
                     onNavigateToSettings = { navController.navigate(Screen.Settings.route) }
+                )
+            }
+
+            composable(Screen.MoreOptions.route) {
+                MoreOptionsScreen(
+                    onBack = { navController.popBackStack() },
+                    onNavigateToProfile = { navController.navigate(Screen.Profile.route) },
+                    onNavigateToPrivacy = { navController.navigate(Screen.Privacy.route) },
+                    onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
+                    onNavigateToAlarm = { navController.navigate(Screen.Alarm.route) },
+                    onNavigateToGame = { navController.navigate(Screen.Game.route) },
+                    onNavigateToRecorder = { navController.navigate(Screen.Recorder.route) }
                 )
             }
 
@@ -296,9 +300,7 @@ fun SleepAnalyzerApp(
             }
 
             composable(Screen.Stats.route) {
-                DetailedStatsScreen(
-                    onBack = { navController.popBackStack() }
-                )
+                DetailedStatsScreen(onBack = null)
             }
 
             composable(Screen.Notes.route) {

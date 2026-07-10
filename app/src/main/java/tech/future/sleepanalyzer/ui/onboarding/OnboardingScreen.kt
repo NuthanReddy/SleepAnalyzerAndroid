@@ -474,7 +474,7 @@ private fun WearablesStep(
         value = viewModel.availableSources()
     }
 
-    StepScaffold(stepNumber = 5) {
+    StepScaffold(stepNumber = 4) {
         Text(
             text = "Wearables",
             style = MaterialTheme.typography.headlineMedium,
@@ -536,7 +536,7 @@ private fun VoiceIsolationStep(
     onSetUp: () -> Unit,
     onSkip: () -> Unit
 ) {
-    StepScaffold(stepNumber = 6) {
+    StepScaffold(stepNumber = 5) {
         Text(
             text = "Voice isolation",
             style = MaterialTheme.typography.headlineMedium,
@@ -637,7 +637,7 @@ private fun VoiceEnrollmentStep(
 
 @Composable
 private fun CompleteStep() {
-    StepScaffold(stepNumber = 7) {
+    StepScaffold(stepNumber = 6) {
         Spacer(modifier = Modifier.weight(1f))
         Text(
             text = "Finishing setup…",
@@ -666,14 +666,14 @@ private fun StepScaffold(
         horizontalAlignment = Alignment.Start
     ) {
         Text(
-            text = "Step $stepNumber of 7",
+            text = "Step $stepNumber of 6",
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary,
             fontWeight = FontWeight.SemiBold
         )
         Spacer(modifier = Modifier.height(8.dp))
         LinearProgressIndicator(
-            progress = { stepNumber / 7f },
+            progress = { stepNumber / 6f },
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(modifier = Modifier.height(24.dp))

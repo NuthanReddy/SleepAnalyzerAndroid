@@ -17,15 +17,18 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -65,12 +68,14 @@ fun RecorderScreen(
 ) {
     val isRecording by viewModel.isRecording.collectAsStateWithLifecycle()
     val recordings by viewModel.recentRecordings.collectAsStateWithLifecycle()
+    val recordingSessions by viewModel.recordingSessions.collectAsStateWithLifecycle()
     val playingId by viewModel.playingRecordingId.collectAsStateWithLifecycle()
     val voiceIsolationEnabled by viewModel.voiceIsolationEnabled.collectAsStateWithLifecycle()
     val snoreStats by viewModel.snoreStats.collectAsStateWithLifecycle()
     val coughStats by viewModel.coughStats.collectAsStateWithLifecycle()
     val talkStats by viewModel.talkStats.collectAsStateWithLifecycle()
     val noiseCount by viewModel.noiseCount.collectAsStateWithLifecycle()
+    val transcriptionState by viewModel.transcriptionState.collectAsStateWithLifecycle()
     val perms = rememberMultiplePermissionsState(PermissionsUtil.recorderPermissions())
     var awaitingPermissionForStart by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -217,17 +222,30 @@ fun RecorderScreen(
                     .weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(recordings, key = { it.id }) { recording ->
-                    RecordingItem(
-                        recording = recording,
-                        isPlaying = playingId == recording.id,
-                        voiceIsolationEnabled = voiceIsolationEnabled,
-                        onPlay = {
-                            if (playingId == recording.id) viewModel.stopPlayback()
-                            else viewModel.playRecording(recording)
-                        },
-                        onDelete = { viewModel.deleteRecording(recording) }
-                    )
+                recordingSessions.forEach { session ->
+                    item(key = "header_${session.key}") {
+                        Text(
+                            text = "${session.title}  ·  ${session.recordings.size}",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 8.dp, bottom = 2.dp)
+                        )
+                    }
+                    items(session.recordings, key = { it.id }) { recording ->
+                        RecordingItem(
+                            recording = recording,
+                            isPlaying = playingId == recording.id,
+                            voiceIsolationEnabled = voiceIsolationEnabled,
+                            transcriptionState = transcriptionState[recording.id],
+                            onPlay = {
+                                if (playingId == recording.id) viewModel.stopPlayback()
+                                else viewModel.playRecording(recording)
+                            },
+                            onTranscribe = { viewModel.transcribe(recording) },
+                            onDelete = { viewModel.deleteRecording(recording) }
+                        )
+                    }
                 }
             }
         }
@@ -354,7 +372,9 @@ fun RecordingItem(
     recording: AudioRecording,
     isPlaying: Boolean,
     voiceIsolationEnabled: Boolean,
+    transcriptionState: TranscriptionUiState?,
     onPlay: () -> Unit,
+    onTranscribe: () -> Unit,
     onDelete: () -> Unit
 ) {
     val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
@@ -370,48 +390,115 @@ fun RecordingItem(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         shape = RoundedCornerShape(12.dp)
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(typeIcon, fontSize = 24.sp)
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(typeIcon, fontSize = 24.sp)
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            recording.type.replaceFirstChar { it.uppercase() },
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        AttributionBadge(
+                            attribution = Attribution.fromKey(recording.attributedTo),
+                            enabled = voiceIsolationEnabled
+                        )
+                    }
                     Text(
-                        recording.type.replaceFirstChar { it.uppercase() },
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    AttributionBadge(
-                        attribution = Attribution.fromKey(recording.attributedTo),
-                        enabled = voiceIsolationEnabled
+                        "${timeFormat.format(Date(recording.startTime))} • ${recording.durationSeconds}s",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+                IconButton(onClick = onPlay) {
+                    Icon(
+                        if (isPlaying) Icons.Default.Stop else Icons.Default.PlayArrow,
+                        "Play",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+                IconButton(onClick = onDelete) {
+                    Icon(
+                        Icons.Default.Delete,
+                        "Delete",
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+
+            if (recording.type == "talk") {
+                TranscriptSection(
+                    recording = recording,
+                    state = transcriptionState,
+                    onTranscribe = onTranscribe
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TranscriptSection(
+    recording: AudioRecording,
+    state: TranscriptionUiState?,
+    onTranscribe: () -> Unit
+) {
+    val transcript = recording.transcript
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 48.dp, end = 12.dp, bottom = 12.dp)
+    ) {
+        when {
+            state is TranscriptionUiState.Running -> Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
                 Text(
-                    "${timeFormat.format(Date(recording.startTime))} • ${recording.durationSeconds}s",
+                    "Transcribing… (first run downloads the speech model)",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            IconButton(onClick = onPlay) {
-                Icon(
-                    if (isPlaying) Icons.Default.Stop else Icons.Default.PlayArrow,
-                    "Play",
-                    tint = MaterialTheme.colorScheme.primary
-                )
-            }
-            IconButton(onClick = onDelete) {
-                Icon(
-                    Icons.Default.Delete,
-                    "Delete",
-                    tint = MaterialTheme.colorScheme.error
-                )
+            !transcript.isNullOrBlank() -> Text(
+                "\u201C$transcript\u201D",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            transcript == "" -> Text(
+                "No speech detected",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            else -> Column {
+                if (state is TranscriptionUiState.Error) {
+                    Text(
+                        state.message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+                TextButton(onClick = onTranscribe, contentPadding = PaddingValues(0.dp)) {
+                    Icon(
+                        Icons.Default.Subtitles,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(if (state is TranscriptionUiState.Error) "Retry transcription" else "Transcribe")
+                }
             }
         }
     }

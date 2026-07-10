@@ -6,8 +6,10 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import tech.future.sleepanalyzer.data.db.entity.AudioRecording
 import tech.future.sleepanalyzer.data.db.entity.SleepNote
 import tech.future.sleepanalyzer.data.repository.SleepRepository
 import java.text.SimpleDateFormat
@@ -18,6 +20,11 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = SleepRepository(application)
 
     val allNotes: StateFlow<List<SleepNote>> = repository.getAllNotes()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /** Spoken-word ("talk") recordings that have a non-empty transcript — the STT log in one place. */
+    val transcripts: StateFlow<List<AudioRecording>> = repository.getRecordingsByType("talk")
+        .map { list -> list.filter { !it.transcript.isNullOrBlank() } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _showAddDialog = MutableStateFlow(false)

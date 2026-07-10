@@ -22,6 +22,8 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Restore
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.SettingsVoice
@@ -38,6 +40,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Slider
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -64,6 +67,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 import tech.future.sleepanalyzer.auth.AuthState
 import tech.future.sleepanalyzer.di.ServiceLocator
+import tech.future.sleepanalyzer.data.prefs.AppPreferences
 import tech.future.sleepanalyzer.service.BedtimeDetectionService
 import tech.future.sleepanalyzer.sync.CloudSyncScheduler
 import tech.future.sleepanalyzer.wearables.HealthConnectSource
@@ -89,6 +93,9 @@ fun SettingsScreen(
     val dataRequestRepository = remember { ServiceLocator.dataRequestRepository }
     val voiceIsolationEnabled by preferences.voiceIsolationEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
     val micForStagingEnabled by preferences.micForStagingEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
+    val eventMergeGapMs by preferences.eventMergeGapMsFlow.collectAsStateWithLifecycle(
+        initialValue = AppPreferences.DEFAULT_EVENT_MERGE_GAP_MS
+    )
     val bedtimeAutoDetectEnabled by preferences.bedtimeAutoDetectEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
     val detailedHealthContextEnabled by preferences.detailedHealthContextEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
     val detailedHealthPermissions = remember { HealthConnectSource(context).detailedContextPermissions() }
@@ -105,6 +112,44 @@ fun SettingsScreen(
     var exactAlarmGranted by remember { mutableStateOf(PermissionsUtil.canScheduleExactAlarms(context)) }
     var notificationsGranted by remember { mutableStateOf(PermissionsUtil.canPostNotifications(context)) }
     var showDeleteDialog by remember { mutableStateOf(false) }
+
+    val backupManager = remember { tech.future.sleepanalyzer.sync.LocalBackupManager(repository) }
+    val createBackupLauncher = rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/json")
+    ) { uri: Uri? ->
+        if (uri != null) {
+            scope.launch {
+                val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openOutputStream(uri)?.use { out ->
+                            backupManager.exportTo(out).getOrThrow()
+                        } ?: throw java.io.IOException("Couldn't open file for writing")
+                    }
+                }
+                result
+                    .onSuccess { count -> snackbarHostState.showSnackbar("Backup saved ($count records).") }
+                    .onFailure { snackbarHostState.showSnackbar(it.message ?: "Backup failed.") }
+            }
+        }
+    }
+    val restoreBackupLauncher = rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            scope.launch {
+                val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            backupManager.importFrom(input).getOrThrow()
+                        } ?: throw java.io.IOException("Couldn't open file for reading")
+                    }
+                }
+                result
+                    .onSuccess { count -> snackbarHostState.showSnackbar("Restored $count records.") }
+                    .onFailure { snackbarHostState.showSnackbar(it.message ?: "Restore failed.") }
+            }
+        }
+    }
 
     DisposableEffect(lifecycleOwner, context) {
         val observer = LifecycleEventObserver { _, event ->
@@ -245,6 +290,39 @@ fun SettingsScreen(
                                 preferences.setMicForStagingEnabled(it)
                             }
                         }
+                    )
+                }
+            }
+
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                ) {
+                    Text(
+                        text = "Merge nearby sound events",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Club snores/coughs that occur within " +
+                            "${"%.1f".format(eventMergeGapMs / 1000f)}s into one recording instead of many tiny clips",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Slider(
+                        value = eventMergeGapMs.toFloat(),
+                        onValueChange = {
+                            scope.launch { preferences.setEventMergeGapMs(it.toLong()) }
+                        },
+                        valueRange = AppPreferences.MIN_EVENT_MERGE_GAP_MS.toFloat()..
+                            AppPreferences.MAX_EVENT_MERGE_GAP_MS.toFloat()
                     )
                 }
             }
@@ -468,6 +546,44 @@ fun SettingsScreen(
                             )
                         }
                     }
+                }
+            }
+
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                                text = "Local backup",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                                text = "Save all sleep data to a file you keep, then restore it after reinstalling.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    SettingsRow(
+                                icon = Icons.Default.Save,
+                                title = "Back up to file",
+                                subtitle = "Export sessions, notes, goals and profile as JSON",
+                                onClick = {
+                                    val stamp = java.text.SimpleDateFormat("yyyyMMdd_HHmm", java.util.Locale.US)
+                                        .format(java.util.Date())
+                                    createBackupLauncher.launch("sleep_analyzer_backup_$stamp.json")
+                                }
+                    )
+                    SettingsRow(
+                                icon = Icons.Default.Restore,
+                                title = "Restore from file",
+                                subtitle = "Import a previously saved backup",
+                                onClick = { restoreBackupLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) }
+                    )
                 }
             }
 

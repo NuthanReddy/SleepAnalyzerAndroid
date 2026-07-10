@@ -28,7 +28,7 @@ import tech.future.sleepanalyzer.ui.theme.*
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DetailedStatsScreen(
-    onBack: () -> Unit,
+    onBack: (() -> Unit)? = null,
     viewModel: StatsViewModel = viewModel()
 ) {
     val timeRange by viewModel.timeRange.collectAsStateWithLifecycle()
@@ -39,14 +39,17 @@ fun DetailedStatsScreen(
     val worstNight by viewModel.worstNight.collectAsStateWithLifecycle()
     val avgDeepSleep by viewModel.averageDeepSleep.collectAsStateWithLifecycle()
     val avgInterruptions by viewModel.averageInterruptions.collectAsStateWithLifecycle()
+    val stepsStats by viewModel.stepsStats.collectAsStateWithLifecycle()
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Sleep Statistics") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                    if (onBack != null) {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
@@ -65,7 +68,7 @@ fun DetailedStatsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                listOf("week" to "Week", "month" to "Month", "all" to "All Time").forEach { (id, label) ->
+                listOf("day" to "Days", "week" to "Weeks", "month" to "Months", "all" to "All").forEach { (id, label) ->
                     FilterChip(
                         selected = timeRange == id,
                         onClick = { viewModel.setTimeRange(id) },
@@ -97,6 +100,24 @@ fun DetailedStatsScreen(
             ) {
                 StatCard("Avg Deep Sleep", "${avgDeepSleep}min", SleepDeep, Modifier.weight(1f))
                 StatCard("Avg Interruptions", String.format("%.1f", avgInterruptions), SleepAwake, Modifier.weight(1f))
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                StatCard(
+                    "Avg Daily Steps",
+                    if (stepsStats.daysWithData > 0) "%,d".format(stepsStats.dailyAverage) else "--",
+                    SleepScore,
+                    Modifier.weight(1f)
+                )
+                StatCard(
+                    "Total Steps",
+                    if (stepsStats.total > 0) "%,d".format(stepsStats.total) else "--",
+                    SleepSecondary,
+                    Modifier.weight(1f)
+                )
             }
 
             Spacer(modifier = Modifier.height(24.dp))

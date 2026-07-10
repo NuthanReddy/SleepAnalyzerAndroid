@@ -18,7 +18,8 @@ import kotlin.math.exp
  */
 class ProfileVoiceMatcher(
     private val profile: VoiceProfile,
-    private val threshold: Float = 0.65f
+    private val threshold: Float = 0.65f,
+    private val unknownThreshold: Float = 0.32f
 ) : VoiceMatcher {
 
     private val profileBands: FloatArray = profile.bandEnergyMeans
@@ -41,8 +42,14 @@ class ProfileVoiceMatcher(
             exp(-(diff * diff) / (2f * profile.pitchStdHz * profile.pitchStdHz)).toFloat()
         } else 0.5f
 
-        val confidence = (timbreScore * 0.65f + pitchScore * 0.35f).coerceIn(0f, 1f)
-        val attribution = if (confidence >= threshold) Attribution.USER else Attribution.PARTNER
+        // Weight pitch more heavily than before: a bed partner often has similar room timbre but a
+        // distinct pitch, so leaning on pitch sharpens speaker isolation.
+        val confidence = (timbreScore * 0.55f + pitchScore * 0.45f).coerceIn(0f, 1f)
+        val attribution = when {
+            confidence >= threshold -> Attribution.USER
+            confidence >= unknownThreshold -> Attribution.PARTNER
+            else -> Attribution.UNKNOWN
+        }
         return AttributionResult(attribution, confidence)
     }
 }

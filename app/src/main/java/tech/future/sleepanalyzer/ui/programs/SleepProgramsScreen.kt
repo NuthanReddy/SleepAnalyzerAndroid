@@ -21,6 +21,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -119,6 +120,19 @@ class ProgramsViewModel(application: Application) : AndroidViewModel(application
             val nextDay = (program.currentDay + 1).coerceAtMost(program.durationDays)
             val completed = nextDay >= program.durationDays
             repository.updateProgram(program.copy(currentDay = nextDay, isCompleted = completed))
+        }
+    }
+
+    fun resetProgram(program: SleepProgram) {
+        viewModelScope.launch {
+            repository.updateProgram(
+                program.copy(
+                    isStarted = false,
+                    isCompleted = false,
+                    currentDay = 0,
+                    startedAt = null
+                )
+            )
         }
     }
 }
@@ -275,6 +289,13 @@ fun ProgramCard(program: SleepProgram, viewModel: ProgramsViewModel) {
                 ) {
                     Text("Complete Day ${program.currentDay}")
                 }
+                Spacer(modifier = Modifier.height(4.dp))
+                TextButton(
+                    onClick = { viewModel.resetProgram(program) },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Reset Program")
+                }
             } else if (program.isCompleted) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
@@ -282,6 +303,13 @@ fun ProgramCard(program: SleepProgram, viewModel: ProgramsViewModel) {
                     color = SleepScore,
                     fontWeight = FontWeight.Bold
                 )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { viewModel.resetProgram(program) },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Restart Program")
+                }
             } else {
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedButton(

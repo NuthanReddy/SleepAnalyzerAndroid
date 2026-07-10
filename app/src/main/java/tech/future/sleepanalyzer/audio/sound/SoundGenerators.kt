@@ -334,22 +334,30 @@ class TonalLullabyGenerator(
     }
 }
 
-/** Soft narrated-story stand-in: hummed lullaby + faint rain bed for "sleep stories". */
+/**
+ * Soft narrated-story stand-in for "sleep stories": a themed [ambient] soundscape blended with a
+ * gentle melodic [lullaby] bed so each story feels like a cohesive scene rather than a bare loop.
+ * Defaults to a faint rain bed + low hummed lullaby (the original "stargazing" mix).
+ */
 class StoryAmbienceGenerator(
-    sampleRate: Int
+    sampleRate: Int,
+    private val ambient: SoundGenerator = RainGenerator(baseGain = 0.5f, impulseChance = 0.0004f),
+    private val lullaby: SoundGenerator = TonalLullabyGenerator(
+        sampleRate, rootHz = 110f, breathRateHz = 0.08f, amplitude = 2400f
+    ),
+    private val ambientGain: Float = 0.45f,
+    private val lullabyGain: Float = 1.0f
 ) : SoundGenerator {
-    private val rain = RainGenerator(baseGain = 0.5f, impulseChance = 0.0004f)
-    private val lullaby = TonalLullabyGenerator(sampleRate, rootHz = 110f, breathRateHz = 0.08f, amplitude = 2200f)
     private var scratchA: ShortArray = ShortArray(0)
     private var scratchB: ShortArray = ShortArray(0)
 
     override fun next(out: ShortArray, bufferSize: Int) {
         if (scratchA.size < bufferSize) scratchA = ShortArray(bufferSize)
         if (scratchB.size < bufferSize) scratchB = ShortArray(bufferSize)
-        rain.next(scratchA, bufferSize)
+        ambient.next(scratchA, bufferSize)
         lullaby.next(scratchB, bufferSize)
         for (i in 0 until bufferSize) {
-            val mixed = scratchA[i].toFloat() * 0.45f + scratchB[i].toFloat()
+            val mixed = scratchA[i].toFloat() * ambientGain + scratchB[i].toFloat() * lullabyGain
             out[i] = mixed.toInt().coerceIn(-12000, 12000).toShort()
         }
     }
@@ -360,7 +368,12 @@ object SoundGeneratorFactory {
         val categoryId = SoundLibrary.getSoundById(soundId)?.first?.id
         return when (soundId) {
             // ---- White noise family ----
-            "white_noise_classic" -> WhiteNoiseGenerator()
+            // Classic is a gently low-passed white noise: keeps the bright "white" character but
+            // rolls off the harsh top end so it's smoother and less fatiguing over a full night.
+            "white_noise_classic" -> FilteredGenerator(
+                WhiteNoiseGenerator(amplitude = 11000),
+                sampleRate, lowPassCutoffHz = 7200f
+            )
             "white_noise_soft" -> FilteredGenerator(
                 WhiteNoiseGenerator(amplitude = 9500),
                 sampleRate, lowPassCutoffHz = 3500f
@@ -452,20 +465,38 @@ object SoundGeneratorFactory {
                 sampleRate = sampleRate, humHz = 196f, humAmplitude = 2400f
             )
 
-            // ---- Stories ----
-            "story_enchanted_forest" -> BirdChirpGenerator(sampleRate, chirpPerSecond = 0.4f,
-                ambient = PinkNoiseGenerator(amplitude = 4500f))
-            "story_ocean_voyage" -> OceanWaveGenerator(sampleRate = sampleRate, periodSec = 8.0)
+            // ---- Stories ---- (themed ambience blended with a soft melodic bed)
+            "story_enchanted_forest" -> StoryAmbienceGenerator(
+                sampleRate,
+                ambient = BirdChirpGenerator(
+                    sampleRate, chirpPerSecond = 0.4f,
+                    ambient = PinkNoiseGenerator(amplitude = 4500f)
+                ),
+                lullaby = TonalLullabyGenerator(sampleRate, rootHz = 130.81f, breathRateHz = 0.07f, amplitude = 2400f),
+                ambientGain = 0.6f
+            )
+            "story_ocean_voyage" -> StoryAmbienceGenerator(
+                sampleRate,
+                ambient = OceanWaveGenerator(sampleRate = sampleRate, periodSec = 8.0),
+                lullaby = TonalLullabyGenerator(sampleRate, rootHz = 110f, breathRateHz = 0.06f, amplitude = 2200f),
+                ambientGain = 0.7f
+            )
             "story_stargazing" -> StoryAmbienceGenerator(sampleRate)
-            "story_mountain_lodge" -> CrackleGenerator(sampleRate, cracklesPerSecond = 1.4f)
+            "story_mountain_lodge" -> StoryAmbienceGenerator(
+                sampleRate,
+                ambient = CrackleGenerator(sampleRate, cracklesPerSecond = 1.4f),
+                lullaby = TonalLullabyGenerator(sampleRate, rootHz = 98f, breathRateHz = 0.05f, amplitude = 2400f),
+                ambientGain = 0.7f
+            )
 
-            // ---- Music ----
-            "music_piano" -> TonalLullabyGenerator(sampleRate, rootHz = 261.63f, amplitude = 3500f)
-            "music_ambient" -> TonalLullabyGenerator(sampleRate, rootHz = 174.61f, breathRateHz = 0.07f, amplitude = 3200f)
-            "music_lullaby" -> TonalLullabyGenerator(sampleRate, rootHz = 196f, breathRateHz = 0.10f, amplitude = 3700f)
+            // ---- Music ---- (raised amplitudes so sleep music sits at a comfortable level
+            // closer to the ambient/noise tracks instead of being noticeably quieter)
+            "music_piano" -> TonalLullabyGenerator(sampleRate, rootHz = 261.63f, amplitude = 6500f)
+            "music_ambient" -> TonalLullabyGenerator(sampleRate, rootHz = 174.61f, breathRateHz = 0.07f, amplitude = 6000f)
+            "music_lullaby" -> TonalLullabyGenerator(sampleRate, rootHz = 196f, breathRateHz = 0.10f, amplitude = 6800f)
             "music_binaural" -> HumGenerator(
-                inner = TonalLullabyGenerator(sampleRate, rootHz = 100f, breathRateHz = 0.05f, amplitude = 1800f),
-                sampleRate = sampleRate, humHz = 4f, humAmplitude = 800f, innerGain = 1.2f
+                inner = TonalLullabyGenerator(sampleRate, rootHz = 100f, breathRateHz = 0.05f, amplitude = 3200f),
+                sampleRate = sampleRate, humHz = 4f, humAmplitude = 1400f, innerGain = 1.2f
             )
 
             else -> when (categoryId) {
@@ -477,7 +508,7 @@ object SoundGeneratorFactory {
                 "asmr" -> PinkNoiseGenerator(amplitude = 6000f)
                 "meditation" -> TonalLullabyGenerator(sampleRate)
                 "stories" -> StoryAmbienceGenerator(sampleRate)
-                "music" -> TonalLullabyGenerator(sampleRate, rootHz = 220f)
+                "music" -> TonalLullabyGenerator(sampleRate, rootHz = 220f, amplitude = 6500f)
                 else -> PinkNoiseGenerator()
             }
         }

@@ -61,6 +61,7 @@ class SleepTrackingService : Service(), SensorEventListener {
 
     /** True when this service auto-started the recorder in signal-only mode (#13), so stop pairs it. */
     private var startedRecorderForStaging = false
+    private var startedRecorderForCapture = false
 
     companion object {
         const val ACTION_START = "start_tracking"
@@ -156,19 +157,28 @@ class SleepTrackingService : Service(), SensorEventListener {
         // #13: when "use mic for staging" is enabled, also run the recorder in signal-only mode so
         // the user gets mic-based stage estimates without starting the recorder by hand. Best-effort:
         // requires RECORD_AUDIO; failures are swallowed since mic staging is optional.
+        //
+        // If the user opted to *capture and store* audio during tracking, run the recorder in full
+        // mode instead (which persists clips). Full capture supersedes signal-only staging so we
+        // never start two recorders.
         serviceScope.launch {
-            val enabled = runCatching {
-                ServiceLocator.preferences.micForStagingEnabledFlow.first()
-            }.getOrDefault(false)
-            if (enabled && isTracking &&
-                PermissionsUtil.isRecordAudioGranted(this@SleepTrackingService)
-            ) {
-                startedRecorderForStaging = true
+            val prefs = ServiceLocator.preferences
+            val captureEnabled = runCatching { prefs.recordAudioDuringTrackingFlow.first() }.getOrDefault(false)
+            val stagingEnabled = runCatching { prefs.micForStagingEnabledFlow.first() }.getOrDefault(false)
+            val micGranted = PermissionsUtil.isRecordAudioGranted(this@SleepTrackingService)
+            if (isTracking && micGranted && (captureEnabled || stagingEnabled)) {
+                val action = if (captureEnabled) {
+                    startedRecorderForCapture = true
+                    AudioRecorderService.ACTION_START
+                } else {
+                    startedRecorderForStaging = true
+                    AudioRecorderService.ACTION_START_SIGNAL_ONLY
+                }
                 runCatching {
                     val recorderIntent = Intent(
                         this@SleepTrackingService,
                         AudioRecorderService::class.java
-                    ).setAction(AudioRecorderService.ACTION_START_SIGNAL_ONLY)
+                    ).setAction(action)
                     ContextCompat.startForegroundService(this@SleepTrackingService, recorderIntent)
                 }
             }
@@ -189,8 +199,9 @@ class SleepTrackingService : Service(), SensorEventListener {
         wakeLock = null
 
         // #13: pair down the signal-only recorder if we started it.
-        if (startedRecorderForStaging) {
+        if (startedRecorderForStaging || startedRecorderForCapture) {
             startedRecorderForStaging = false
+            startedRecorderForCapture = false
             runCatching {
                 val recorderIntent = Intent(this, AudioRecorderService::class.java)
                     .setAction(AudioRecorderService.ACTION_STOP)

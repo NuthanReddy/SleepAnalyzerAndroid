@@ -19,6 +19,7 @@ class AppPreferences(private val context: Context) {
         val VOICE_ISOLATION_ENABLED = booleanPreferencesKey("voice_isolation_enabled")
         val VOICE_ISOLATION_ASKED = booleanPreferencesKey("voice_isolation_asked")
         val MIC_FOR_STAGING_ENABLED = booleanPreferencesKey("mic_for_staging_enabled")
+        val RECORD_AUDIO_DURING_TRACKING = booleanPreferencesKey("record_audio_during_tracking")
         val BEDTIME_AUTO_DETECT_ENABLED = booleanPreferencesKey("bedtime_auto_detect_enabled")
         val DETAILED_HEALTH_CONTEXT_ENABLED = booleanPreferencesKey("detailed_health_context_enabled")
         val PROGRAMS_SEEDED = booleanPreferencesKey("programs_seeded")
@@ -26,18 +27,29 @@ class AppPreferences(private val context: Context) {
         val LAST_DATA_REQUEST_ID = stringPreferencesKey("last_data_request_id")
         val LAST_PROMPT_TIME = longPreferencesKey("last_prompt_time")
         val SOUND_DEFAULT_VOLUME = floatPreferencesKey("sound_default_volume")
+        val EVENT_MERGE_GAP_MS = longPreferencesKey("event_merge_gap_ms")
     }
 
     val setupCompletedFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.SETUP_COMPLETED] ?: false }
     val voiceIsolationEnabledFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.VOICE_ISOLATION_ENABLED] ?: false }
     val voiceIsolationAskedFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.VOICE_ISOLATION_ASKED] ?: false }
     val micForStagingEnabledFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.MIC_FOR_STAGING_ENABLED] ?: false }
+    val recordAudioDuringTrackingFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.RECORD_AUDIO_DURING_TRACKING] ?: false }
     val bedtimeAutoDetectEnabledFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.BEDTIME_AUTO_DETECT_ENABLED] ?: false }
     val detailedHealthContextEnabledFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.DETAILED_HEALTH_CONTEXT_ENABLED] ?: false }
     val programsSeededFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.PROGRAMS_SEEDED] ?: false }
     val cloudSyncEnabledFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.CLOUD_SYNC_ENABLED] ?: false }
     val lastDataRequestIdFlow: Flow<String?> = context.dataStore.data.map { it[Keys.LAST_DATA_REQUEST_ID] }
     val soundDefaultVolumeFlow: Flow<Float> = context.dataStore.data.map { it[Keys.SOUND_DEFAULT_VOLUME] ?: 0.7f }
+
+    /**
+     * Silence gap, in milliseconds, that must elapse before an in-progress sleep-sound event is
+     * committed as its own recording. Larger values "club" bursts (snores, coughs) that are close
+     * together into a single clip instead of many tiny chunks. Clamped to a sane 0.5s–5s range.
+     */
+    val eventMergeGapMsFlow: Flow<Long> = context.dataStore.data.map {
+        (it[Keys.EVENT_MERGE_GAP_MS] ?: DEFAULT_EVENT_MERGE_GAP_MS).coerceIn(MIN_EVENT_MERGE_GAP_MS, MAX_EVENT_MERGE_GAP_MS)
+    }
 
     suspend fun setSetupCompleted(value: Boolean) {
         context.dataStore.edit { it[Keys.SETUP_COMPLETED] = value }
@@ -52,6 +64,10 @@ class AppPreferences(private val context: Context) {
 
     suspend fun setMicForStagingEnabled(value: Boolean) {
         context.dataStore.edit { it[Keys.MIC_FOR_STAGING_ENABLED] = value }
+    }
+
+    suspend fun setRecordAudioDuringTracking(value: Boolean) {
+        context.dataStore.edit { it[Keys.RECORD_AUDIO_DURING_TRACKING] = value }
     }
 
     suspend fun setBedtimeAutoDetectEnabled(value: Boolean) {
@@ -86,5 +102,17 @@ class AppPreferences(private val context: Context) {
 
     suspend fun setSoundDefaultVolume(volume: Float) {
         context.dataStore.edit { it[Keys.SOUND_DEFAULT_VOLUME] = volume.coerceIn(0f, 1f) }
+    }
+
+    suspend fun setEventMergeGapMs(gapMs: Long) {
+        context.dataStore.edit {
+            it[Keys.EVENT_MERGE_GAP_MS] = gapMs.coerceIn(MIN_EVENT_MERGE_GAP_MS, MAX_EVENT_MERGE_GAP_MS)
+        }
+    }
+
+    companion object {
+        const val DEFAULT_EVENT_MERGE_GAP_MS = 1500L
+        const val MIN_EVENT_MERGE_GAP_MS = 500L
+        const val MAX_EVENT_MERGE_GAP_MS = 5000L
     }
 }

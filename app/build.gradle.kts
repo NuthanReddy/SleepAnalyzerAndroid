@@ -83,6 +83,9 @@ dependencies {
     implementation(libs.firebase.firestore.ktx)
     implementation(libs.play.services.auth)
     implementation(libs.googleid)
+    // Offline on-device speech-to-text for transcribing "talk" recordings. The acoustic model is
+    // downloaded on first use (see VoskTranscriber) rather than bundled, to keep the APK small.
+    implementation("com.alphacephei:vosk-android:0.3.47")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

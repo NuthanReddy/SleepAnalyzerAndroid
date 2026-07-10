@@ -32,4 +32,10 @@ interface AudioRecordingDao {
 
     @Query("SELECT * FROM audio_recordings ORDER BY startTime DESC LIMIT :limit")
     fun getRecentRecordings(limit: Int = 20): Flow<List<AudioRecording>>
+
+    @Query("SELECT * FROM audio_recordings WHERE type = 'talk' AND transcript IS NULL ORDER BY startTime DESC")
+    suspend fun getPendingTranscriptions(): List<AudioRecording>
+
+    @Query("UPDATE audio_recordings SET transcript = :transcript WHERE id = :id")
+    suspend fun updateTranscript(id: Long, transcript: String)
 }

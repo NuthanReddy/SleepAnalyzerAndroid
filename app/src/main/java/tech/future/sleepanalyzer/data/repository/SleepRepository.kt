@@ -63,6 +63,8 @@ class SleepRepository(context: Context) {
     fun getRecordingsByType(type: String): Flow<List<AudioRecording>> = recordingDao.getByType(type)
     fun getRecordingCountByType(sessionId: Long, type: String): Flow<Int> = recordingDao.getCountByType(sessionId, type)
     fun getRecentRecordings(limit: Int = 20): Flow<List<AudioRecording>> = recordingDao.getRecentRecordings(limit)
+    suspend fun getPendingTranscriptions(): List<AudioRecording> = recordingDao.getPendingTranscriptions()
+    suspend fun updateRecordingTranscript(id: Long, transcript: String) = recordingDao.updateTranscript(id, transcript)
 
     // Sleep Goals
     suspend fun insertGoal(goal: SleepGoal): Long = goalDao.insert(goal)

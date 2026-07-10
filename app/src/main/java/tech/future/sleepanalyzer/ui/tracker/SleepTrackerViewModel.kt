@@ -8,18 +8,23 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import tech.future.sleepanalyzer.data.db.entity.AlarmConfig
 import tech.future.sleepanalyzer.data.db.entity.SleepSession
 import tech.future.sleepanalyzer.data.repository.SleepRepository
+import tech.future.sleepanalyzer.di.ServiceLocator
 import tech.future.sleepanalyzer.service.SleepTrackingService
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
 class SleepTrackerViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = SleepRepository(application)
+    private val preferences = ServiceLocator.preferences
 
     private val _isTracking = MutableStateFlow(false)
     val isTracking: StateFlow<Boolean> = _isTracking
@@ -50,6 +55,45 @@ class SleepTrackerViewModel(application: Application) : AndroidViewModel(applica
 
     val recentSessions: StateFlow<List<SleepSession>> = repository.getRecentSessions(7)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /** The soonest upcoming enabled alarm, or null if none are enabled. */
+    val nextAlarm: StateFlow<AlarmConfig?> = repository.getAllAlarms()
+        .map { alarms -> alarms.filter { it.isEnabled }.minByOrNull { nextTriggerMillis(it) } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    /** Whether audio should be captured and stored while sleep tracking is running. */
+    val recordAudioDuringTracking: StateFlow<Boolean> = preferences.recordAudioDuringTrackingFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    fun setRecordAudioDuringTracking(enabled: Boolean) {
+        viewModelScope.launch { preferences.setRecordAudioDuringTracking(enabled) }
+    }
+
+    /**
+     * Epoch millis of the next time [alarm] will fire, honouring its day-of-week mask
+     * (1=Mon..7=Sun). Alarms with no valid days are treated as daily.
+     */
+    private fun nextTriggerMillis(alarm: AlarmConfig): Long {
+        val days = alarm.daysOfWeek.split(",")
+            .mapNotNull { it.trim().toIntOrNull() }
+            .filter { it in 1..7 }
+            .toSet()
+        val now = Calendar.getInstance()
+        for (offset in 0..7) {
+            val cal = Calendar.getInstance().apply {
+                add(Calendar.DAY_OF_YEAR, offset)
+                set(Calendar.HOUR_OF_DAY, alarm.hour)
+                set(Calendar.MINUTE, alarm.minute)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }
+            val isoDow = if (cal.get(Calendar.DAY_OF_WEEK) == Calendar.SUNDAY) 7
+            else cal.get(Calendar.DAY_OF_WEEK) - 1
+            val dayOk = days.isEmpty() || isoDow in days
+            if (dayOk && cal.timeInMillis > now.timeInMillis) return cal.timeInMillis
+        }
+        return Long.MAX_VALUE
+    }
 
     init {
         viewModelScope.launch {

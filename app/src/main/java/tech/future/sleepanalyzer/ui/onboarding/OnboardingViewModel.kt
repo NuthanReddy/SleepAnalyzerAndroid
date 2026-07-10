@@ -118,7 +118,7 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
             _currentStep.value = when (_currentStep.value) {
                 OnboardingStep.Welcome -> OnboardingStep.Signup
                 OnboardingStep.Signup -> OnboardingStep.Permissions
-                OnboardingStep.Permissions -> OnboardingStep.AboutYou
+                OnboardingStep.Permissions -> OnboardingStep.Wearables
                 OnboardingStep.AboutYou -> OnboardingStep.Wearables
                 OnboardingStep.Wearables -> OnboardingStep.VoiceIsolation
                 OnboardingStep.VoiceIsolation -> OnboardingStep.VoiceEnroll
@@ -137,7 +137,7 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
             OnboardingStep.Signup -> OnboardingStep.Welcome
             OnboardingStep.Permissions -> OnboardingStep.Signup
             OnboardingStep.AboutYou -> OnboardingStep.Permissions
-            OnboardingStep.Wearables -> OnboardingStep.AboutYou
+            OnboardingStep.Wearables -> OnboardingStep.Permissions
             OnboardingStep.VoiceIsolation -> OnboardingStep.Wearables
             OnboardingStep.VoiceEnroll -> OnboardingStep.VoiceIsolation
             OnboardingStep.Complete -> OnboardingStep.VoiceEnroll

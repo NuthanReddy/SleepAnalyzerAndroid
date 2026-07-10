@@ -41,6 +41,7 @@ import tech.future.sleepanalyzer.audio.processing.VoiceActivityDetector
 import tech.future.sleepanalyzer.audio.source.AudioRecordSource
 import tech.future.sleepanalyzer.audio.util.ShortRingBuffer
 import tech.future.sleepanalyzer.data.db.entity.AudioRecording
+import tech.future.sleepanalyzer.data.prefs.AppPreferences
 import tech.future.sleepanalyzer.di.ServiceLocator
 import tech.future.sleepanalyzer.util.Constants
 import tech.future.sleepanalyzer.util.PermissionsUtil
@@ -68,6 +69,15 @@ class AudioRecorderService : Service() {
     private var silenceStartMs: Long? = null
 
     /**
+     * Silence gap that commits an in-progress event, sourced from user preferences so nearby
+     * bursts (snores/coughs a second or two apart) get clubbed into one clip instead of many tiny
+     * chunks. Defaults to [AppPreferences.DEFAULT_EVENT_MERGE_GAP_MS]; updated live while recording.
+     */
+    @Volatile
+    private var silenceCommitGapMs: Long = AppPreferences.DEFAULT_EVENT_MERGE_GAP_MS
+    private var mergeGapJob: Job? = null
+
+    /**
      * Signal-only mode (#12): runs the analysis pipeline far enough to feed
      * [MicSleepSignalAggregator] for stage estimation, but never encodes audio files or writes
      * [AudioRecording] rows. Used by the mic-for-staging path so users get mic-based stage
@@ -81,7 +91,6 @@ class AudioRecorderService : Service() {
         const val ACTION_START_SIGNAL_ONLY = "start_recording_signal_only"
         const val ACTION_STOP = "stop_recording"
 
-        private const val SILENCE_COMMIT_GAP_MS = 800L
         private const val UNKNOWN_CONFIDENCE_THRESHOLD = 0.5f
         private const val MIC_ROLLOVER_INTERVAL_MS = 60_000L
 
@@ -138,6 +147,13 @@ class AudioRecorderService : Service() {
                 delay(MIC_ROLLOVER_INTERVAL_MS)
                 if (!isActive) break
                 micAggregator.rollover()
+            }
+        }
+
+        mergeGapJob?.cancel()
+        mergeGapJob = serviceScope.launch {
+            ServiceLocator.preferences.eventMergeGapMsFlow.collect { gap ->
+                silenceCommitGapMs = gap
             }
         }
 
@@ -206,7 +222,7 @@ class AudioRecorderService : Service() {
 
             val silenceGapMs = frameEndMs - (silenceStartMs ?: frame.startTimeMs)
             val voiceDurationMs = lastMs - startMs
-            if (silenceGapMs < SILENCE_COMMIT_GAP_MS) return
+            if (silenceGapMs < silenceCommitGapMs) return
 
             voiceStartMs = null
             lastVoiceEndMs = null
@@ -340,6 +356,8 @@ class AudioRecorderService : Service() {
         collectionJob = null
         rolloverJob?.cancel()
         rolloverJob = null
+        mergeGapJob?.cancel()
+        mergeGapJob = null
         shutdownRecorder()
     }
 
@@ -348,6 +366,8 @@ class AudioRecorderService : Service() {
         signalOnly = false
         rolloverJob?.cancel()
         rolloverJob = null
+        mergeGapJob?.cancel()
+        mergeGapJob = null
         pipeline?.stop()
         pipeline = null
         ringBuffer?.clear()
@@ -430,6 +450,8 @@ class AudioRecorderService : Service() {
         collectionJob = null
         rolloverJob?.cancel()
         rolloverJob = null
+        mergeGapJob?.cancel()
+        mergeGapJob = null
         pipeline?.stop()
         pipeline = null
         ringBuffer?.clear()

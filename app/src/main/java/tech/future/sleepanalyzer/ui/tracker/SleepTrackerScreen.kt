@@ -1,5 +1,9 @@
 package tech.future.sleepanalyzer.ui.tracker
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -25,9 +29,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Alarm
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Mood
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Nightlight
 import androidx.compose.material.icons.filled.NightsStay
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -37,9 +46,11 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -60,6 +71,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import kotlinx.coroutines.delay
+import tech.future.sleepanalyzer.data.db.entity.AlarmConfig
 import tech.future.sleepanalyzer.data.db.entity.SleepSession
 import tech.future.sleepanalyzer.ui.theme.SleepAwake
 import tech.future.sleepanalyzer.ui.theme.SleepOnBackground
@@ -77,12 +89,17 @@ import java.util.Locale
 @Composable
 fun SleepTrackerScreen(
     onNavigateToResult: (Long) -> Unit = {},
+    onNavigateToSounds: () -> Unit = {},
+    onNavigateToAlarm: () -> Unit = {},
+    onNavigateToRecorder: () -> Unit = {},
     viewModel: SleepTrackerViewModel = viewModel()
 ) {
     val isTracking by viewModel.isTracking.collectAsStateWithLifecycle()
     val trackingStartTime by viewModel.trackingStartTime.collectAsStateWithLifecycle()
     val recentSessions by viewModel.recentSessions.collectAsStateWithLifecycle()
     val showMoodSelector by viewModel.showMoodSelector.collectAsStateWithLifecycle()
+    val nextAlarm by viewModel.nextAlarm.collectAsStateWithLifecycle()
+    val recordAudio by viewModel.recordAudioDuringTracking.collectAsStateWithLifecycle()
     val trackerPermissions = PermissionsUtil.trackerPermissions()
     val perms = rememberMultiplePermissionsState(trackerPermissions)
     val trackerPermissionsGranted = trackerPermissions.isEmpty() || perms.allPermissionsGranted
@@ -104,6 +121,25 @@ fun SleepTrackerScreen(
         }
     }
 
+    // Dim the screen to near-black while sleep tracking is active so the display effectively
+    // goes off — saving battery and avoiding light disturbance during the night. Brightness is
+    // restored automatically when tracking stops or the screen leaves composition. (Fully powering
+    // the panel off requires device-admin privileges, which this app intentionally does not take.)
+    val activity = remember(context) { context.findActivity() }
+    DisposableEffect(isTracking, activity) {
+        val window = activity?.window
+        if (isTracking && window != null) {
+            window.attributes = window.attributes.apply { screenBrightness = 0.005f }
+        }
+        onDispose {
+            window?.let {
+                it.attributes = it.attributes.apply {
+                    screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                }
+            }
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -111,31 +147,29 @@ fun SleepTrackerScreen(
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text(
-            text = "Sleep Tracker",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.align(Alignment.Start)
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = if (isTracking) "Tracking your sleep..." else "Ready to track your sleep",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.align(Alignment.Start)
-        )
+        // "Sleep aid" bar → ambient sounds library.
+        SleepAidBar(onClick = onNavigateToSounds)
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
-        TrackingCircle(
-            isTracking = isTracking,
-            startTime = trackingStartTime
-        )
+        if (isTracking) {
+            TrackingCircle(isTracking = true, startTime = trackingStartTime)
+            Spacer(modifier = Modifier.height(24.dp))
+        } else {
+            // Central alarm time picker → alarm settings.
+            AlarmTimePicker(alarm = nextAlarm, onClick = onNavigateToAlarm)
+            Spacer(modifier = Modifier.height(24.dp))
 
-        Spacer(modifier = Modifier.height(32.dp))
+            // Record audio toggle.
+            OptionToggleCard(
+                icon = Icons.Default.GraphicEq,
+                title = "Record audio",
+                subtitle = "Capture snores, coughs & sleep talk",
+                checked = recordAudio,
+                onCheckedChange = { viewModel.setRecordAudioDuringTracking(it) }
+            )
+            Spacer(modifier = Modifier.height(12.dp))
 
-        if (!isTracking) {
             OutlinedButton(
                 onClick = { viewModel.showMoodBefore() },
                 modifier = Modifier.fillMaxWidth()
@@ -144,9 +178,15 @@ fun SleepTrackerScreen(
                 Spacer(modifier = Modifier.width(8.dp))
                 Text("How are you feeling?")
             }
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(20.dp))
         }
 
+        val smartWakeActive = !isTracking && nextAlarm?.let { it.useSmartWake && it.wakeWindowMinutes > 0 } == true
+        val startColor = when {
+            isTracking -> MaterialTheme.colorScheme.error
+            smartWakeActive -> Color(0xFFFF9800)
+            else -> MaterialTheme.colorScheme.primary
+        }
         Button(
             onClick = {
                 if (isTracking) {
@@ -163,7 +203,7 @@ fun SleepTrackerScreen(
                 .fillMaxWidth()
                 .height(56.dp),
             colors = ButtonDefaults.buttonColors(
-                containerColor = if (isTracking) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                containerColor = startColor
             ),
             shape = RoundedCornerShape(16.dp)
         ) {
@@ -174,7 +214,7 @@ fun SleepTrackerScreen(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = if (isTracking) "Stop Tracking" else "Start Sleep Tracking",
+                text = if (isTracking) "Stop" else "Start",
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold
             )
@@ -207,6 +247,133 @@ fun SleepTrackerScreen(
             onSelect = { viewModel.selectMood(it) },
             onDismiss = { viewModel.dismissMoodSelector() }
         )
+    }
+}
+
+@Composable
+private fun SleepAidBar(onClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(28.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Default.MusicNote,
+                contentDescription = null,
+                tint = SleepSecondary,
+                modifier = Modifier.size(22.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = "Sleep aid",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                Icons.Default.PlayArrow,
+                contentDescription = "Play",
+                tint = SleepSecondary,
+                modifier = Modifier.size(28.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun AlarmTimePicker(alarm: AlarmConfig?, onClick: () -> Unit) {
+    val timeText = alarm?.let { String.format(Locale.getDefault(), "%d:%02d", it.hour, it.minute) } ?: "--:--"
+    val windowText = remember(alarm) {
+        if (alarm == null) {
+            "Tap to set your wake-up alarm"
+        } else if (alarm.useSmartWake && alarm.wakeWindowMinutes > 0) {
+            val startTotal = alarm.hour * 60 + alarm.minute - alarm.wakeWindowMinutes
+            val norm = ((startTotal % 1440) + 1440) % 1440
+            val startText = String.format(Locale.getDefault(), "%d:%02d", norm / 60, norm % 60)
+            val endText = String.format(Locale.getDefault(), "%d:%02d", alarm.hour, alarm.minute)
+            "Wake up easy between $startText – $endText"
+        } else {
+            "Alarm set — smart wake off"
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Default.Alarm,
+                contentDescription = null,
+                tint = SleepSecondary,
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = timeText,
+                fontSize = 64.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = windowText,
+            style = MaterialTheme.typography.bodyMedium,
+            color = SleepOnSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun OptionToggleCard(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(icon, contentDescription = null, tint = SleepSecondary, modifier = Modifier.size(22.dp))
+            Spacer(modifier = Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = SleepOnSurfaceVariant
+                )
+            }
+            Switch(checked = checked, onCheckedChange = onCheckedChange)
+        }
     }
 }
 
@@ -403,4 +570,10 @@ fun MoodSelectorDialog(onSelect: (String) -> Unit, onDismiss: () -> Unit) {
             }
         }
     )
+}
+
+private fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
