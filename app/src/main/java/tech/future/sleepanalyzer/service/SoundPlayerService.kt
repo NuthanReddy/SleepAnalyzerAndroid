@@ -142,9 +142,13 @@ class SoundPlayerService : Service() {
             val buffer = ShortArray(1024)
             try {
                 while (isActive) {
+                    if (_state.value.isPaused) {
+                        delay(100)
+                        continue
+                    }
                     selectedGenerator.next(buffer, buffer.size)
                     val written = track.write(buffer, 0, buffer.size, AudioTrack.WRITE_BLOCKING)
-                    if (written <= 0) break
+                    if (written < 0) break
                 }
             } catch (_: IllegalStateException) {
             } finally {
