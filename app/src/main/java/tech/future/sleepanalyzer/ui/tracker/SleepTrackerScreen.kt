@@ -3,6 +3,7 @@ package tech.future.sleepanalyzer.ui.tracker
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.Intent
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.compose.animation.core.RepeatMode
@@ -32,10 +33,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.Mood
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Nightlight
 import androidx.compose.material.icons.filled.NightsStay
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
@@ -44,8 +45,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -73,6 +74,7 @@ import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import kotlinx.coroutines.delay
 import tech.future.sleepanalyzer.data.db.entity.AlarmConfig
 import tech.future.sleepanalyzer.data.db.entity.SleepSession
+import tech.future.sleepanalyzer.service.SoundPlayerService
 import tech.future.sleepanalyzer.ui.theme.SleepAwake
 import tech.future.sleepanalyzer.ui.theme.SleepOnBackground
 import tech.future.sleepanalyzer.ui.theme.SleepOnSurfaceVariant
@@ -147,8 +149,28 @@ fun SleepTrackerScreen(
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // "Sleep aid" bar → ambient sounds library.
-        SleepAidBar(onClick = onNavigateToSounds)
+        // "Sleep aid" bar → ambient sounds library, with inline playback controls.
+        val soundState by SoundPlayerService.state.collectAsStateWithLifecycle()
+        SleepAidBar(
+            state = soundState,
+            onOpen = onNavigateToSounds,
+            onPauseResume = {
+                val action = if (soundState.isPaused) {
+                    SoundPlayerService.ACTION_RESUME
+                } else {
+                    SoundPlayerService.ACTION_PAUSE
+                }
+                context.startService(
+                    Intent(context, SoundPlayerService::class.java).setAction(action)
+                )
+            },
+            onStop = {
+                context.startService(
+                    Intent(context, SoundPlayerService::class.java)
+                        .setAction(SoundPlayerService.ACTION_STOP)
+                )
+            }
+        )
 
         Spacer(modifier = Modifier.height(24.dp))
 
@@ -169,16 +191,6 @@ fun SleepTrackerScreen(
                 onCheckedChange = { viewModel.setRecordAudioDuringTracking(it) }
             )
             Spacer(modifier = Modifier.height(12.dp))
-
-            OutlinedButton(
-                onClick = { viewModel.showMoodBefore() },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Default.Mood, contentDescription = "Mood", modifier = Modifier.size(20.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("How are you feeling?")
-            }
-            Spacer(modifier = Modifier.height(20.dp))
         }
 
         val smartWakeActive = !isTracking && nextAlarm?.let { it.useSmartWake && it.wakeWindowMinutes > 0 } == true
@@ -251,11 +263,16 @@ fun SleepTrackerScreen(
 }
 
 @Composable
-private fun SleepAidBar(onClick: () -> Unit) {
+private fun SleepAidBar(
+    state: SoundPlayerService.Companion.PlaybackState,
+    onOpen: () -> Unit,
+    onPauseResume: () -> Unit,
+    onStop: () -> Unit
+) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
+            .clickable(onClick = onOpen),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         shape = RoundedCornerShape(28.dp)
     ) {
@@ -272,19 +289,48 @@ private fun SleepAidBar(onClick: () -> Unit) {
                 modifier = Modifier.size(22.dp)
             )
             Spacer(modifier = Modifier.width(12.dp))
-            Text(
-                text = "Sleep aid",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.weight(1f)
-            )
-            Icon(
-                Icons.Default.PlayArrow,
-                contentDescription = "Play",
-                tint = SleepSecondary,
-                modifier = Modifier.size(28.dp)
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Sleep aid",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                if (state.isPlaying) {
+                    val label = state.soundName?.replace("_", " ")?.replaceFirstChar { it.uppercase() }
+                    Text(
+                        text = if (state.isPaused) "Paused${label?.let { " · $it" } ?: ""}"
+                        else "Playing${label?.let { " · $it" } ?: ""}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            if (state.isPlaying) {
+                IconButton(onClick = onPauseResume) {
+                    Icon(
+                        if (state.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                        contentDescription = if (state.isPaused) "Resume" else "Pause",
+                        tint = SleepSecondary,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+                IconButton(onClick = onStop) {
+                    Icon(
+                        Icons.Default.Stop,
+                        contentDescription = "Stop",
+                        tint = SleepSecondary,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+            } else {
+                Icon(
+                    Icons.Default.PlayArrow,
+                    contentDescription = "Play",
+                    tint = SleepSecondary,
+                    modifier = Modifier.size(28.dp)
+                )
+            }
         }
     }
 }
@@ -539,7 +585,7 @@ fun MoodSelectorDialog(onSelect: (String) -> Unit, onDismiss: () -> Unit) {
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("How are you feeling?") },
+        title = { Text("How did you sleep?") },
         text = {
             Row(
                 modifier = Modifier.fillMaxWidth(),

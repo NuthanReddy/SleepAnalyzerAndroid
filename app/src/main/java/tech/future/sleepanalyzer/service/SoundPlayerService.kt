@@ -19,6 +19,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import tech.future.sleepanalyzer.MainActivity
@@ -41,16 +43,25 @@ class SoundPlayerService : Service() {
     companion object {
         const val ACTION_PLAY = "play_sound"
         const val ACTION_STOP = "stop_sound"
+        const val ACTION_PAUSE = "pause_sound"
+        const val ACTION_RESUME = "resume_sound"
         const val ACTION_SET_TIMER = "set_timer"
         const val ACTION_SET_VOLUME = "set_volume"
         const val EXTRA_SOUND_NAME = "sound_name"
         const val EXTRA_TIMER_MINUTES = "timer_minutes"
         const val EXTRA_VOLUME = "volume"
 
-        var isPlaying = false
-            private set
-        var currentSoundName: String? = null
-            private set
+        data class PlaybackState(
+            val isPlaying: Boolean = false,
+            val isPaused: Boolean = false,
+            val soundName: String? = null
+        )
+
+        private val _state = MutableStateFlow(PlaybackState())
+        val state: StateFlow<PlaybackState> = _state
+
+        val isPlaying: Boolean get() = _state.value.isPlaying
+        val currentSoundName: String? get() = _state.value.soundName
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -62,6 +73,8 @@ class SoundPlayerService : Service() {
                 playSoundLoop(soundName)
             }
             ACTION_STOP -> stopSound()
+            ACTION_PAUSE -> pauseSound()
+            ACTION_RESUME -> resumeSound()
             ACTION_SET_TIMER -> {
                 val minutes = intent.getIntExtra(EXTRA_TIMER_MINUTES, 30)
                 startTimer(minutes)
@@ -115,8 +128,7 @@ class SoundPlayerService : Service() {
         track.setTrackVolume(volume)
         track.play()
 
-        currentSoundName = soundName
-        isPlaying = true
+        _state.value = PlaybackState(isPlaying = true, isPaused = false, soundName = soundName)
 
         val notification = createNotification("Playing: ${soundName.replace("_", " ")}")
         ServiceCompat.startForeground(
@@ -166,6 +178,38 @@ class SoundPlayerService : Service() {
         releasePlayback(stopService = true)
     }
 
+    private fun pauseSound() {
+        val track = audioTrack ?: return
+        if (!_state.value.isPlaying || _state.value.isPaused) return
+        try {
+            track.pause()
+        } catch (_: IllegalStateException) {
+        }
+        _state.value = _state.value.copy(isPaused = true)
+        _state.value.soundName?.let {
+            updateNotification("Paused: ${it.replace("_", " ")}")
+        }
+    }
+
+    private fun resumeSound() {
+        val track = audioTrack ?: return
+        if (!_state.value.isPaused) return
+        try {
+            track.play()
+        } catch (_: IllegalStateException) {
+        }
+        _state.value = _state.value.copy(isPaused = false)
+        _state.value.soundName?.let {
+            updateNotification("Playing: ${it.replace("_", " ")}")
+        }
+    }
+
+    private fun updateNotification(text: String) {
+        val notification = createNotification(text)
+        getSystemService(NotificationManager::class.java)
+            .notify(Constants.SOUND_PLAYER_NOTIFICATION_ID, notification)
+    }
+
     private fun releasePlayback(stopService: Boolean) {
         fadeJob?.cancel()
         fadeJob = null
@@ -176,8 +220,7 @@ class SoundPlayerService : Service() {
         val track = audioTrack
         audioTrack = null
         generator = null
-        isPlaying = false
-        currentSoundName = null
+        _state.value = PlaybackState()
 
         try {
             track?.stop()

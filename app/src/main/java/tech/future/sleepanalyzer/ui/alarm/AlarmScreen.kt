@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -337,7 +338,7 @@ fun AlarmCard(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun AlarmEditorDialog(viewModel: AlarmViewModel) {
     val hour by viewModel.editHour.collectAsStateWithLifecycle()
@@ -382,7 +383,7 @@ fun AlarmEditorDialog(viewModel: AlarmViewModel) {
                 item {
                     Text("Repeat", style = MaterialTheme.typography.titleSmall)
                     Spacer(modifier = Modifier.height(4.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         dayNames.forEachIndexed { index, name ->
                             val dayNum = index + 1
                             val selected = days.contains(dayNum)
