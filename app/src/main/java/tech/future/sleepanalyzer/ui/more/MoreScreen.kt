@@ -1,7 +1,6 @@
 package tech.future.sleepanalyzer.ui.more
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -12,35 +11,44 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Flag
-import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.Nightlight
-import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.Summarize
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
-import tech.future.sleepanalyzer.ui.stats.StatsViewModel
-import tech.future.sleepanalyzer.ui.theme.SleepScore
+import kotlinx.coroutines.launch
+import tech.future.sleepanalyzer.data.prefs.AppPreferences
 import tech.future.sleepanalyzer.ui.theme.SleepSecondary
 
 @Composable
@@ -48,13 +56,25 @@ fun MoreScreen(
     onNavigateToGoals: () -> Unit = {},
     onNavigateToSounds: () -> Unit = {},
     onNavigateToAlarm: () -> Unit = {},
-    onNavigateToMoreOptions: () -> Unit = {},
     onNavigateToSettings: () -> Unit = {},
-    statsViewModel: StatsViewModel = viewModel()
+    onNavigateToProfile: () -> Unit = {},
+    onNavigateToPrivacy: () -> Unit = {},
+    onNavigateToGame: () -> Unit = {},
+    onNavigateToRecorder: () -> Unit = {}
 ) {
-    val sessions by statsViewModel.sessions.collectAsStateWithLifecycle()
-    val avgScore by statsViewModel.averageScore.collectAsStateWithLifecycle()
-    val avgDuration by statsViewModel.averageDuration.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val prefs = remember(context) { AppPreferences(context) }
+    val scope = rememberCoroutineScope()
+    val weeklyReportEnabled by prefs.weeklyReportEnabledFlow.collectAsStateWithLifecycle(initialValue = true)
+    val voiceIsolationEnabled by prefs.voiceIsolationEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
+    val micForStagingEnabled by prefs.micForStagingEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
+    val bedtimeAutoDetectEnabled by prefs.bedtimeAutoDetectEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
+    val detailedHealthContextEnabled by prefs.detailedHealthContextEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
+    val versionName = remember(context) {
+        runCatching {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        }.getOrNull() ?: ""
+    }
 
     Column(
         modifier = Modifier
@@ -63,97 +83,94 @@ fun MoreScreen(
             .padding(16.dp)
     ) {
         Text(
-            text = "Profile",
+            text = "Settings",
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold
         )
-        Spacer(modifier = Modifier.height(20.dp))
-
-        // 2x2 stat grid
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            StatCell(
-                icon = Icons.Default.Nightlight,
-                value = "${sessions.size}",
-                label = "Nights",
-                tint = SleepSecondary,
-                modifier = Modifier.weight(1f)
-            )
-            StatCell(
-                icon = Icons.Default.Flag,
-                value = avgScore?.let { "${it.toInt()}%" } ?: "—",
-                label = "Avg. quality",
-                tint = SleepScore,
-                modifier = Modifier.weight(1f)
-            )
-        }
-        Spacer(modifier = Modifier.height(12.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            StatCell(
-                icon = Icons.Default.Schedule,
-                value = avgDuration?.let { "${it.toInt() / 60}h ${it.toInt() % 60}m" } ?: "—",
-                label = "Avg. time",
-                tint = SleepSecondary,
-                modifier = Modifier.weight(1f)
-            )
-            StatCell(
-                icon = Icons.Default.CloudDone,
-                value = "OK",
-                label = "Backup",
-                tint = Color(0xFF4CAF50),
-                modifier = Modifier.weight(1f)
-            )
-        }
 
         Spacer(modifier = Modifier.height(28.dp))
-        SectionHeader("Settings")
+        SectionHeader("General")
         SettingsRow(Icons.Default.Flag, "Sleep Goal", "Not set", onNavigateToGoals)
         SettingsRow(Icons.Default.MusicNote, "Sound", "Ambient", onNavigateToSounds)
-        SettingsRow(Icons.Default.Bedtime, "Wake up phase", "30 min", onNavigateToAlarm)
-        SettingsRow(Icons.Default.Summarize, "Weekly report", "On", onNavigateToSettings)
-        SettingsRow(Icons.Default.MoreHoriz, "More", null, onNavigateToMoreOptions)
+        SettingsRow(Icons.Default.Bedtime, "Smart Alarms", "30 min", onNavigateToAlarm)
+        SwitchRow(
+            Icons.Default.Summarize,
+            "Weekly report",
+            null,
+            weeklyReportEnabled,
+            onCheckedChange = { scope.launch { prefs.setWeeklyReportEnabled(it) } }
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+        SectionHeader("Recording & Detection")
+        SwitchRow(
+            Icons.Default.GraphicEq,
+            "Voice isolation",
+            "Use your enrolled voice profile to separate your sleep sounds",
+            voiceIsolationEnabled,
+            onCheckedChange = { scope.launch { prefs.setVoiceIsolationEnabled(it) } }
+        )
+        SwitchRow(
+            Icons.Default.Mic,
+            "Microphone for sleep staging",
+            "Helps when your phone is on the nightstand instead of the mattress",
+            micForStagingEnabled,
+            onCheckedChange = { scope.launch { prefs.setMicForStagingEnabled(it) } }
+        )
+        SwitchRow(
+            Icons.Default.Bedtime,
+            "Detect bedtime automatically",
+            "Start tracking once your screen is off and you've been still. Motion only \u2014 no audio",
+            bedtimeAutoDetectEnabled,
+            onCheckedChange = { scope.launch { prefs.setBedtimeAutoDetectEnabled(it) } }
+        )
+        SwitchRow(
+            Icons.Default.FavoriteBorder,
+            "Detailed health context",
+            "Read caffeine, hydration, and body-temperature logs from Health Connect for richer reports",
+            detailedHealthContextEnabled,
+            onCheckedChange = { scope.launch { prefs.setDetailedHealthContextEnabled(it) } }
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+        SectionHeader("Personal")
+        SettingsRow(Icons.Default.AccountCircle, "Account", null, onNavigateToSettings)
+        SettingsRow(Icons.Default.Person, "About you", null, onNavigateToProfile)
+        SettingsRow(Icons.Default.Lock, "Consent and privacy", null, onNavigateToPrivacy)
+        SettingsRow(Icons.Default.FavoriteBorder, "Health Connect", "Not connected", onNavigateToSettings)
+
+        Spacer(modifier = Modifier.height(24.dp))
+        SectionHeader("Alarm")
+        SettingsRow(Icons.Default.Mic, "Motion detection", "Microphone", onNavigateToSettings)
+        SettingsRow(Icons.Default.GraphicEq, "Sound detection", "20 nights", onNavigateToSettings)
+        SettingsRow(Icons.Default.LocationOn, "Placement reminders", "On", onNavigateToSettings)
+        SettingsRow(Icons.Default.Alarm, "Snooze", "Intelligent", onNavigateToAlarm)
+        SettingsRow(Icons.Default.Notifications, "Vibration", "As backup", onNavigateToAlarm)
+        SettingsRow(Icons.Default.Warning, "Battery warning", "On", onNavigateToSettings)
+
+        Spacer(modifier = Modifier.height(24.dp))
+        SectionHeader("Other")
+        SettingsRow(Icons.Default.List, "Database", "Export CSV", onNavigateToSettings)
+        SettingsRow(Icons.Default.SportsEsports, "Alertness game", null, onNavigateToGame)
+        SettingsRow(Icons.Default.Mic, "Sleep recorder", null, onNavigateToRecorder)
+        SettingsRow(Icons.Default.Info, "Third-party software", null, onNavigateToPrivacy)
 
         Spacer(modifier = Modifier.height(24.dp))
         SectionHeader("Premium")
         SettingsRow(Icons.Default.CloudDone, "Online backup", "On", onNavigateToSettings)
 
         Spacer(modifier = Modifier.height(24.dp))
-    }
-}
-
-@Composable
-private fun StatCell(
-    icon: ImageVector,
-    value: String,
-    label: String,
-    tint: Color,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        modifier = modifier,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        shape = RoundedCornerShape(16.dp)
-    ) {
-        Column(
+        Text(
+            text = "Sleep Analyzer $versionName",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(26.dp))
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Text(
-                label,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
+                .padding(vertical = 8.dp),
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
     }
 }
 
@@ -166,6 +183,46 @@ private fun SectionHeader(text: String) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
     )
+}
+
+@Composable
+private fun SwitchRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String?,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
+            .padding(vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = title,
+            tint = SleepSecondary,
+            modifier = Modifier.size(24.dp)
+        )
+        Spacer(modifier = Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge
+            )
+            if (subtitle != null) {
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
 }
 
 @Composable

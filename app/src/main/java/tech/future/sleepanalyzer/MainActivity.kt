@@ -39,7 +39,6 @@ import tech.future.sleepanalyzer.ui.alarm.AlarmScreen
 import tech.future.sleepanalyzer.ui.auth.SignupScreen
 import tech.future.sleepanalyzer.ui.games.AlertnessGameScreen
 import tech.future.sleepanalyzer.ui.goals.SleepGoalScreen
-import tech.future.sleepanalyzer.ui.more.MoreOptionsScreen
 import tech.future.sleepanalyzer.ui.more.MoreScreen
 import tech.future.sleepanalyzer.ui.navigation.Screen
 import tech.future.sleepanalyzer.ui.notes.SleepNotesScreen
@@ -256,18 +255,9 @@ fun SleepAnalyzerApp(
                     onNavigateToGoals = { navController.navigate(Screen.Goals.route) },
                     onNavigateToSounds = { navController.navigate(Screen.Sounds.route) },
                     onNavigateToAlarm = { navController.navigate(Screen.Alarm.route) },
-                    onNavigateToMoreOptions = { navController.navigate(Screen.MoreOptions.route) },
-                    onNavigateToSettings = { navController.navigate(Screen.Settings.route) }
-                )
-            }
-
-            composable(Screen.MoreOptions.route) {
-                MoreOptionsScreen(
-                    onBack = { navController.popBackStack() },
+                    onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
                     onNavigateToProfile = { navController.navigate(Screen.Profile.route) },
                     onNavigateToPrivacy = { navController.navigate(Screen.Privacy.route) },
-                    onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
-                    onNavigateToAlarm = { navController.navigate(Screen.Alarm.route) },
                     onNavigateToGame = { navController.navigate(Screen.Game.route) },
                     onNavigateToRecorder = { navController.navigate(Screen.Recorder.route) }
                 )

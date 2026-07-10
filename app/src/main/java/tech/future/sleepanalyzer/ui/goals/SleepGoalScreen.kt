@@ -24,11 +24,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TimePicker
+import androidx.compose.material3.TimeInput
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -163,12 +165,12 @@ fun GoalEditorDialog(viewModel: GoalsViewModel) {
         onDismissRequest = { viewModel.dismissEditor() },
         title = { Text("Set Sleep Goal") },
         text = {
-            Column {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Text("Bedtime", style = MaterialTheme.typography.titleSmall)
-                TimePicker(state = bedtimePicker)
+                TimeInput(state = bedtimePicker)
                 Spacer(modifier = Modifier.height(12.dp))
                 Text("Wake Time", style = MaterialTheme.typography.titleSmall)
-                TimePicker(state = wakePicker)
+                TimeInput(state = wakePicker)
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
                     text = "Target Quality Score: $targetScore",

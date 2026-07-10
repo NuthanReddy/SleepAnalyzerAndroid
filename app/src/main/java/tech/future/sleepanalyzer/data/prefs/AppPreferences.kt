@@ -28,6 +28,7 @@ class AppPreferences(private val context: Context) {
         val LAST_PROMPT_TIME = longPreferencesKey("last_prompt_time")
         val SOUND_DEFAULT_VOLUME = floatPreferencesKey("sound_default_volume")
         val EVENT_MERGE_GAP_MS = longPreferencesKey("event_merge_gap_ms")
+        val WEEKLY_REPORT_ENABLED = booleanPreferencesKey("weekly_report_enabled")
     }
 
     val setupCompletedFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.SETUP_COMPLETED] ?: false }
@@ -41,6 +42,7 @@ class AppPreferences(private val context: Context) {
     val cloudSyncEnabledFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.CLOUD_SYNC_ENABLED] ?: false }
     val lastDataRequestIdFlow: Flow<String?> = context.dataStore.data.map { it[Keys.LAST_DATA_REQUEST_ID] }
     val soundDefaultVolumeFlow: Flow<Float> = context.dataStore.data.map { it[Keys.SOUND_DEFAULT_VOLUME] ?: 0.7f }
+    val weeklyReportEnabledFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.WEEKLY_REPORT_ENABLED] ?: true }
 
     /**
      * Silence gap, in milliseconds, that must elapse before an in-progress sleep-sound event is
@@ -108,6 +110,10 @@ class AppPreferences(private val context: Context) {
         context.dataStore.edit {
             it[Keys.EVENT_MERGE_GAP_MS] = gapMs.coerceIn(MIN_EVENT_MERGE_GAP_MS, MAX_EVENT_MERGE_GAP_MS)
         }
+    }
+
+    suspend fun setWeeklyReportEnabled(value: Boolean) {
+        context.dataStore.edit { it[Keys.WEEKLY_REPORT_ENABLED] = value }
     }
 
     companion object {
