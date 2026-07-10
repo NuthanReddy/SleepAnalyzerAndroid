@@ -576,7 +576,7 @@ Permissions:
 
 **Why this matters.** When the phone sits on a nightstand (not on the mattress) the accelerometer is useless — it only senses phone motion, not body motion. The only signal we have in that placement is the microphone. This section captures the design for using mic audio as a primary stage signal, slotting into the existing Strategy pattern so motion-only, multi-signal, and mic-only paths all coexist.
 
-**Status:** Done. `AudioRecorderService` now publishes rolling `MicSleepSignal` snapshots that SmartWake can consume when the Settings toggle is enabled. Enabling the toggle alone does **not** auto-start microphone capture yet; if the recorder service is idle the estimator simply falls back until the planned `bedtime-auto-detect` work handles auto-start.
+**Status:** Done. `AudioRecorderService` publishes rolling `MicSleepSignal` snapshots that SmartWake consumes when the Settings toggle is enabled. Auto-start now landed (**backlog #13**): when `micForStagingEnabled` is on and `RECORD_AUDIO` is granted, `SleepTrackingService.startTracking()` also starts the recorder in **signal-only** mode (**#12**, `ACTION_START_SIGNAL_ONLY`) — the pipeline still feeds `MicSleepSignalAggregator` for staging but `commitEvent` early-returns before any encoding or per-event Room write, so mic staging runs with **zero audio retention**. `stopTracking()` stops it. If the recorder is idle (toggle off or permission denied) the estimator falls back exactly as before.
 
 ### 7c.1 Signals available from a nightstand microphone
 
@@ -977,11 +977,13 @@ DataStore key set lives in `AppPreferences`:
 | User profile integration (onboarding step, settings, factory wiring) | Done | Subagent |
 | Microphone-based stage estimator (`audio/analysis/` + `MicSleepStageEstimator`) — see Section 7c | Done | Main agent |
 | Firebase Auth + Cloud Sync + Data Rights + HC autofill | Done | Main agent |
-| Bedtime auto-detect (`BedtimeDetector` + passive `SleepTrackingService.start()`) | Designed | Planned |
+| Bedtime auto-detect (`BedtimeDetector` + `BedtimeDetectionService`) — backlog #11 | Done | Main agent |
+| Auto-start mic staging in signal-only mode (`ACTION_START_SIGNAL_ONLY`) — backlog #12/#13 | Done | Main agent |
+| End-user privacy notice (`ui/settings/PrivacyScreen`) — backlog #18 | Done | Main agent |
 | Vendor `SleepSessionRecord` ingestion (Health Connect stage segments) — see Section 7d.4 | Done | Main agent |
 | `RestingHeartRateRecord` calibration of multi-signal baseline HR — see Section 7d.4 | Done | Main agent |
 | `SkinTemperatureRecord` consumption after SDK bump — see Section 7d.4 | Designed | Planned |
-| Exercise/Nutrition/Hydration context surfacing in Sleep Result — see Section 7d.4 | Designed | Planned |
+| Nutrition/Hydration/body-temperature context in Sleep Result (`HealthContextInsights` card) — backlog #7 | Partial | Main agent |
 
 ## 12. Optional Data & Graceful Degradation
 
@@ -1179,6 +1181,8 @@ flowchart TD
 - Phone numbers are treated as PII; the app only logs masked/DEBUG-only verification traces and never syncs raw SMS content.
 
 ## Changelog
+
+- 2026-07-11 Remaining buildable backlog landed: **#11** bedtime auto-detect (`sleep/BedtimeDetector` clock-injected state machine + `service/BedtimeDetectionService`, opt-in `bedtimeAutoDetectEnabled`, `BootReceiver` restart); **#12** signal-only recorder mode (`AudioRecorderService.ACTION_START_SIGNAL_ONLY` — staging signals with zero audio retention); **#13** auto-start mic staging (`SleepTrackingService` starts/stops the signal-only recorder alongside the `micForStagingEnabled` toggle); **#7** detailed Health Connect context (`HealthContextInsights` "Health context" card on Sleep Result from caffeine/hydration/body-temperature via a separate opt-in `detailedHealthContextEnabled` permission set); **#18** end-user privacy notice (`ui/settings/PrivacyScreen`). Root `README.md` added and `docs/features.md` / `docs/issues.md` / this file (§7c, §11) refreshed to match. No production behavior changed by the doc refresh.
 
 - 2026-07-11 APK size measured under R8 (**backlog #15**). Full `assembleRelease` (R8 + resource
   shrinking, JDK 17 / AGP 8.7.3) produces a **3.38 MB** unsigned release APK vs a 23.09 MB debug APK

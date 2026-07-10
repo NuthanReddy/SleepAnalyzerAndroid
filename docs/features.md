@@ -55,6 +55,26 @@ This file catalogs the user-facing features implemented in the generated Android
 - Recording playback and delete actions.
 - **Representative files:** `service\AudioRecorderService.kt`, `ui\recorder\RecorderScreen.kt`, `ui\recorder\RecorderViewModel.kt`
 
+## Automatic bedtime detection
+
+- Opt-in "Detect bedtime automatically" mode that watches screen-off + accelerometer-still + microphone-quiet and starts a tracking session on its own after a sustained quiet window (default 15 minutes).
+- Conservative, deterministic state machine — resets on any activity (screen turns on, movement above threshold, ambient noise) and triggers at most once per quiet window.
+- Restarts after device reboot when the toggle is enabled.
+- **Representative files:** `sleep\BedtimeDetector.kt`, `service\BedtimeDetectionService.kt`
+
+## Microphone-based sleep staging (signal-only)
+
+- Opt-in "Use microphone for sleep staging" mode: when tracking starts, the recorder also runs in **signal-only** mode, feeding breathing / movement / snore signals into the sleep-stage estimator.
+- Signal-only mode retains **no audio** — clips are never encoded or persisted; only derived staging signals are used.
+- A single toggle starts and stops both the tracker and the recorder together.
+- **Representative files:** `service\SleepTrackingService.kt`, `service\AudioRecorderService.kt`, `audio\analysis\MicSleepSignalAggregator.kt`
+
+## Health context insights
+
+- Opt-in "Detailed health context" mode reads caffeine, hydration, and body-temperature from Health Connect through a separate permission set that never affects the core grant.
+- Surfaces plain-language notes in a "Health context" card on the sleep report — informational only, never fabricated score changes.
+- **Representative files:** `wearables\HealthContextInsights.kt`, `wearables\HealthConnectSource.kt`, `ui\tracker\SleepResultScreen.kt`
+
 ## Sleep sounds and music
 
 - Sound category catalog for white noise, pink noise, green noise, rain, nature, ASMR, meditation, bedtime stories, and sleep music.
@@ -116,3 +136,9 @@ This file catalogs the user-facing features implemented in the generated Android
 - DAO coverage for create, update, delete, and query operations.
 - Repository wrapper used by ViewModels and services.
 - **Representative files:** `data\db\AppDatabase.kt`, `data\db\entity\*.kt`, `data\db\dao\*.kt`, `data\repository\SleepRepository.kt`
+
+## Privacy notice and settings
+
+- In-app privacy notice (Settings → Privacy) explaining in plain language what stays on device, what syncs to Firebase only when cloud sync is opted in, the "raw audio never leaves the device" guarantee, the Health Connect read scope, and how to request export / deletion.
+- Settings toggles for automatic bedtime detection, microphone-based staging, and detailed health context.
+- **Representative files:** `ui\settings\PrivacyScreen.kt`, `ui\settings\SettingsScreen.kt`

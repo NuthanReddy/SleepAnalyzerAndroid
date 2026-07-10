@@ -75,14 +75,14 @@ This file tracks issues found during reviews of the app. Each entry has a **Stat
 14. **Wear OS support is not implemented**
     - **Status:** Open. The Wear OS module would still be valuable but is out of scope for the current pass. Note: Pixel Watch / many Samsung / Garmin watches already write to Health Connect, so most users now get watch-derived signals automatically via the wearables path above.
 
-15. **No automated tests cover the generated behavior**
-    - **Status:** Open. Repositories, scoring, alarm scheduling, classifier strategies, and SmartWakeAnalyzer are all pure or near-pure and would be easy to test. Top priority: unit tests for `SpectralClassifier`, `ProfileVoiceMatcher`, `AlarmScheduler.calculateNextTriggerTime`, `SleepCyclePredictor`, and `SmartWakeAnalyzer.decide`.
+15. **[RESOLVED] No automated tests cover the generated behavior**
+    - **Resolution:** A JVM unit-test suite now covers the pure / near-pure logic — `SpectralClassifier`, `ProfileVoiceMatcher`, `AlarmScheduler`, `SleepCyclePredictor`, `SmartWakeAnalyzer`, `SleepQualityScorer`, `BedtimeDetector`, `HealthContextInsights`, and more (17 suites, 103 tests, all green via `testDebugUnitTest`). Further model-quality testing is tracked in the backlog, not here.
 
 ## New items surfaced during the rebuild
 
 These are not regressions but follow-ups worth tracking:
 
-- **A. APK size verification under R8.** Release builds are configured with `isMinifyEnabled = true` and `isShrinkResources = true`, but we haven't profiled the actual size. Need a baseline release APK measurement + ProGuard rule review for `androidx.health.connect`, `androidx.work`, and Compose.
+- **A. [RESOLVED] APK size verification under R8.** Measured a full `assembleRelease` (R8 + resource shrinking, JDK 17): **3.38 MB** unsigned release APK vs 23.09 MB debug (~85% smaller), DEX-dominated. No extra ProGuard keeps were needed for `androidx.health.connect`, `androidx.work`, or Compose (AAR consumer rules sufficed). Documented in `docs/architecture.md` §5.1 (backlog #15).
 - **B. Health Connect skin temperature.** `SkinTemperatureRecord` is gated behind a newer Health Connect SDK than the one we pin. The enum + sync infrastructure is ready; flipping it on is a one-line addition once we bump `healthConnect` past `1.1.0-alpha07`.
 - **C. [RESOLVED] Profile-driven scoring weights.** Extracted scoring logic into pure `sleep/SleepQualityScorer` object so it can be unit-tested. `SleepTrackingService.stopTracking()` now passes the active `UserProfile` so deep-sleep targets and the ideal duration window adapt by `activityLevel` (athlete/active vs. moderate vs. light/sedentary). Athletes are expected to consolidate ~30% deep sleep; sedentary users ~18%. The Kotlin scorer is fully covered by `SleepQualityScorerTest`.
 - **D. [RESOLVED] Snooze for SmartWake-triggered alarms.** Introduced `Constants.EXTRA_ORIGINAL_TARGET_MS` so the user's actual target wake time threads from the alarm trigger (DEADLINE alarm = `nowMs`; SmartWakeService = stored `currentWindowEndMs`) into `AlarmPlaybackService`. `snoozeAlarm()` now anchors to `max(originalTargetMs, nowMs)` + snooze minutes, with a `nowMs + 60s` safety floor. The notification Snooze action also carries the extra so it behaves identically to the in-app button. Tracked in backlog #10.
