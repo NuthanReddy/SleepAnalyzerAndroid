@@ -4,16 +4,21 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Crescent moon as a single closed path: outer arc (r=28) + inner arc (r=22), centered at (54,54) -->
+    <!--
+        Crescent moon: a full disc with an offset disc subtracted via evenOdd.
+        The cutout is transparent, so the dark background gradient shows through
+        to form the crescent. Everything sits inside the ~66dp safe zone.
+    -->
     <path
         android:fillColor="#FFF4C24A"
-        android:pathData="M54,26 A28,28 0 1,0 54,82 A22,22 0 1,1 54,26 Z" />
-    <!-- Star 1 (upper-right) -->
+        android:fillType="evenOdd"
+        android:pathData="M50,27 a27,27 0 1,0 0,54 a27,27 0 1,0 0,-54 z M63,23 a27,27 0 1,0 0,54 a27,27 0 1,0 0,-54 z" />
+    <!-- Star 1 (upper-right, inside safe zone) -->
     <path
         android:fillColor="#FFFFFFFF"
-        android:pathData="M86,32 l1.6,3.6 l3.9,0.4 l-2.9,2.7 l0.8,3.9 l-3.4,-2 l-3.4,2 l0.8,-3.9 l-2.9,-2.7 l3.9,-0.4 z" />
-    <!-- Star 2 (lower-right) -->
+        android:pathData="M72,36 l1.5,3.4 l3.7,0.4 l-2.8,2.5 l0.8,3.7 l-3.2,-1.9 l-3.2,1.9 l0.8,-3.7 l-2.8,-2.5 l3.7,-0.4 z" />
+    <!-- Star 2 (right, inside safe zone) -->
     <path
         android:fillColor="#FFFFFFFF"
-        android:pathData="M82,78 l1.1,2.5 l2.7,0.3 l-2,1.9 l0.5,2.7 l-2.3,-1.4 l-2.3,1.4 l0.5,-2.7 l-2,-1.9 l2.7,-0.3 z" />
+        android:pathData="M74,60 l1.1,2.5 l2.7,0.3 l-2,1.9 l0.5,2.7 l-2.3,-1.4 l-2.3,1.4 l0.5,-2.7 l-2,-1.9 l2.7,-0.3 z" />
 </vector>
