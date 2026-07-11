@@ -3,7 +3,7 @@ package tech.future.sleepanalyzer.ui.navigation
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.BarChart
-import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Nightlight
 import androidx.compose.material.icons.filled.SelfImprovement
@@ -34,7 +34,7 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
         fun createRoute(category: String) = "sound_player/$category"
     }
     data object Stats : Screen("stats", "Statistics", Icons.Default.BarChart)
-    data object Notes : Screen("notes", "Journal", Icons.Default.GraphicEq)
+    data object Sessions : Screen("sessions", "Sessions", Icons.Default.History)
     data object Goals : Screen("goals", "Sleep Goals")
     data object Programs : Screen("programs", "Programs", Icons.Default.SelfImprovement)
     data object Game : Screen("game", "Alertness Game")
@@ -45,7 +45,7 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
 
     companion object {
         val bottomNavItems: List<Screen>
-            get() = listOf(Track, Programs, Notes, Stats, More)
+            get() = listOf(Track, Programs, Sessions, Stats, More)
     }
 }
 

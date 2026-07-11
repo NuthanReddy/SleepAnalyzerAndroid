@@ -59,6 +59,8 @@ import tech.future.sleepanalyzer.data.db.entity.WearableSample
 import tech.future.sleepanalyzer.di.ServiceLocator
 import tech.future.sleepanalyzer.sleep.SleepStage
 import tech.future.sleepanalyzer.sleep.VendorStageSegment
+import tech.future.sleepanalyzer.ui.recorder.RecorderViewModel
+import tech.future.sleepanalyzer.ui.recorder.RecordingItem
 import tech.future.sleepanalyzer.ui.theme.SleepAwake
 import tech.future.sleepanalyzer.ui.theme.SleepDeep
 import tech.future.sleepanalyzer.ui.theme.SleepLight
@@ -81,6 +83,11 @@ fun SleepResultScreen(
 ) {
     val session by viewModel.session.collectAsStateWithLifecycle()
     val healthInsights by viewModel.healthInsights.collectAsStateWithLifecycle()
+    val recordings by viewModel.recordings.collectAsStateWithLifecycle()
+    val recorder: RecorderViewModel = viewModel()
+    val playingId by recorder.playingRecordingId.collectAsStateWithLifecycle()
+    val voiceIsolationEnabled by recorder.voiceIsolationEnabled.collectAsStateWithLifecycle()
+    val transcriptionState by recorder.transcriptionState.collectAsStateWithLifecycle()
     val repository = remember { ServiceLocator.repository }
     val heartRateSamples by repository.observeWearableSamples(sessionId, WearableMetric.HEART_RATE.name)
         .collectAsStateWithLifecycle(initialValue = emptyList())
@@ -174,6 +181,34 @@ fun SleepResultScreen(
                 if (healthInsights.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(12.dp))
                     HealthContextCard(healthInsights)
+                }
+                if (recordings.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(20.dp))
+                    Text(
+                        text = "Sounds & voices",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.Start)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    recordings.forEach { recording ->
+                        RecordingItem(
+                            recording = recording,
+                            isPlaying = playingId == recording.id,
+                            voiceIsolationEnabled = voiceIsolationEnabled,
+                            transcriptionState = transcriptionState[recording.id],
+                            onPlay = {
+                                if (playingId == recording.id) recorder.stopPlayback()
+                                else recorder.playRecording(recording)
+                            },
+                            onTranscribe = { recorder.transcribe(recording) },
+                            onDelete = { recorder.deleteRecording(recording) }
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
                 }
                 Spacer(modifier = Modifier.height(32.dp))
             }

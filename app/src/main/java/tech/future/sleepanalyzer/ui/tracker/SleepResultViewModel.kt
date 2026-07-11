@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import tech.future.sleepanalyzer.data.db.entity.SleepSession
+import tech.future.sleepanalyzer.data.db.entity.AudioRecording
 import tech.future.sleepanalyzer.data.repository.SleepRepository
 import tech.future.sleepanalyzer.wearables.HealthContextInsight
 import tech.future.sleepanalyzer.wearables.HealthContextInsights
@@ -20,6 +21,10 @@ class SleepResultViewModel(application: Application, sessionId: Long) : AndroidV
 
     val session: StateFlow<SleepSession?> = repository.getSessionByIdFlow(sessionId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    /** Audio events (snore/cough/talk/noise) captured during this session, oldest first. */
+    val recordings: StateFlow<List<AudioRecording>> = repository.getRecordingsBySession(sessionId)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     /** Opt-in "Detailed health context" notes (#7); empty unless the user logged such data. */
     val healthInsights: StateFlow<List<HealthContextInsight>> = session

@@ -41,12 +41,12 @@ import tech.future.sleepanalyzer.ui.games.AlertnessGameScreen
 import tech.future.sleepanalyzer.ui.goals.SleepGoalScreen
 import tech.future.sleepanalyzer.ui.more.MoreScreen
 import tech.future.sleepanalyzer.ui.navigation.Screen
-import tech.future.sleepanalyzer.ui.notes.SleepNotesScreen
 import tech.future.sleepanalyzer.ui.onboarding.OnboardingScreen
 import tech.future.sleepanalyzer.ui.onboarding.VoiceEnrollScreen
 import tech.future.sleepanalyzer.ui.profile.ProfileEditorScreen
 import tech.future.sleepanalyzer.ui.programs.SleepProgramsScreen
 import tech.future.sleepanalyzer.ui.recorder.RecorderScreen
+import tech.future.sleepanalyzer.ui.sessions.SessionsScreen
 import tech.future.sleepanalyzer.ui.settings.PrivacyScreen
 import tech.future.sleepanalyzer.ui.settings.SettingsScreen
 import tech.future.sleepanalyzer.ui.sounds.SoundPlayerScreen
@@ -293,8 +293,12 @@ fun SleepAnalyzerApp(
                 DetailedStatsScreen(onBack = null)
             }
 
-            composable(Screen.Notes.route) {
-                SleepNotesScreen()
+            composable(Screen.Sessions.route) {
+                SessionsScreen(
+                    onOpenSession = { sessionId ->
+                        navController.navigate(Screen.SleepResult.createRoute(sessionId))
+                    }
+                )
             }
 
             composable(Screen.Goals.route) {
