@@ -55,12 +55,14 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import tech.future.sleepanalyzer.data.db.entity.SleepSession
+import tech.future.sleepanalyzer.data.db.entity.AudioRecording
 import tech.future.sleepanalyzer.data.db.entity.WearableSample
 import tech.future.sleepanalyzer.di.ServiceLocator
 import tech.future.sleepanalyzer.sleep.SleepStage
 import tech.future.sleepanalyzer.sleep.VendorStageSegment
 import tech.future.sleepanalyzer.ui.recorder.RecorderViewModel
 import tech.future.sleepanalyzer.ui.recorder.RecordingItem
+import tech.future.sleepanalyzer.ui.recorder.StatChip
 import tech.future.sleepanalyzer.ui.theme.SleepAwake
 import tech.future.sleepanalyzer.ui.theme.SleepDeep
 import tech.future.sleepanalyzer.ui.theme.SleepLight
@@ -88,6 +90,14 @@ fun SleepResultScreen(
     val playingId by recorder.playingRecordingId.collectAsStateWithLifecycle()
     val voiceIsolationEnabled by recorder.voiceIsolationEnabled.collectAsStateWithLifecycle()
     val transcriptionState by recorder.transcriptionState.collectAsStateWithLifecycle()
+
+    // Bring full recorder parity to a session: offline-transcribe any talk clips captured during the
+    // night that haven't been transcribed yet, so transcripts persist and show without manual taps.
+    LaunchedEffect(recordings) {
+        recordings.forEach { rec ->
+            if (rec.type == "talk" && rec.transcript == null) recorder.transcribe(rec)
+        }
+    }
     val repository = remember { ServiceLocator.repository }
     val heartRateSamples by repository.observeWearableSamples(sessionId, WearableMetric.HEART_RATE.name)
         .collectAsStateWithLifecycle(initialValue = emptyList())
@@ -194,6 +204,8 @@ fun SleepResultScreen(
                             .align(Alignment.Start)
                     )
                     Spacer(modifier = Modifier.height(8.dp))
+                    SoundSummaryRow(recordings)
+                    Spacer(modifier = Modifier.height(8.dp))
                     recordings.forEach { recording ->
                         RecordingItem(
                             recording = recording,
@@ -220,6 +232,34 @@ fun SleepResultScreen(
         ) {
             CircularProgressIndicator()
         }
+    }
+}
+
+@Composable
+private fun SoundSummaryRow(recordings: List<AudioRecording>) {
+    val snore = recordings.count { it.type == "snore" }
+    val cough = recordings.count { it.type == "cough" }
+    val talk = recordings.count { it.type == "talk" }
+    val noise = recordings.count { it.type == "noise" }
+    val you = recordings.count { it.attributedTo == "user" }
+    val partner = recordings.count { it.attributedTo == "partner" }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        StatChip("Snore", snore.toString(), SleepSecondary, Modifier.weight(1f))
+        StatChip("Cough", cough.toString(), SleepREM, Modifier.weight(1f))
+        StatChip("Talk", talk.toString(), SleepDeep, Modifier.weight(1f))
+        StatChip("Noise", noise.toString(), SleepAwake, Modifier.weight(1f))
+    }
+    if (you > 0 || partner > 0) {
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "Voices: You $you • Partner $partner",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
