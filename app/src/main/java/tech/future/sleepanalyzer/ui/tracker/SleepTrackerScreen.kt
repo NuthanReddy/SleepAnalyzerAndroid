@@ -1,5 +1,6 @@
 package tech.future.sleepanalyzer.ui.tracker
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
@@ -70,6 +71,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import kotlinx.coroutines.delay
 import tech.future.sleepanalyzer.data.db.entity.AlarmConfig
@@ -102,9 +104,20 @@ fun SleepTrackerScreen(
     val showMoodSelector by viewModel.showMoodSelector.collectAsStateWithLifecycle()
     val nextAlarm by viewModel.nextAlarm.collectAsStateWithLifecycle()
     val recordAudio by viewModel.recordAudioDuringTracking.collectAsStateWithLifecycle()
-    val trackerPermissions = PermissionsUtil.trackerPermissions()
+    val trackerPermissions = remember(recordAudio) {
+        (PermissionsUtil.trackerPermissions() +
+            if (recordAudio) listOf(Manifest.permission.RECORD_AUDIO) else emptyList()).distinct()
+    }
     val perms = rememberMultiplePermissionsState(trackerPermissions)
-    val trackerPermissionsGranted = trackerPermissions.isEmpty() || perms.allPermissionsGranted
+    // Tracking itself only needs the non-audio permissions (e.g. notifications). The mic is
+    // requested when "Record audio" is on so clips actually get captured, but a denied mic must
+    // not block starting a night — in that case we just track without audio.
+    val essentialPermissionsGranted = perms.permissions
+        .filter { it.permission != Manifest.permission.RECORD_AUDIO }
+        .all { it.status.isGranted }
+    val micGranted = perms.permissions
+        .firstOrNull { it.permission == Manifest.permission.RECORD_AUDIO }
+        ?.status?.isGranted == true
     var awaitingPermissionForStart by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
@@ -115,11 +128,16 @@ fun SleepTrackerScreen(
     }
 
     // Auto-resume start once permissions are granted (avoids double-tap UX). See backlog #24.
-    LaunchedEffect(trackerPermissionsGranted, awaitingPermissionForStart) {
-        if (awaitingPermissionForStart && trackerPermissionsGranted && !isTracking) {
+    LaunchedEffect(essentialPermissionsGranted, awaitingPermissionForStart) {
+        if (awaitingPermissionForStart && essentialPermissionsGranted && !isTracking) {
             awaitingPermissionForStart = false
             viewModel.startTracking()
-            Toast.makeText(context, "Tracking started", Toast.LENGTH_SHORT).show()
+            val msg = if (recordAudio && !micGranted) {
+                "Tracking started — mic denied, audio won't be recorded"
+            } else {
+                "Tracking started"
+            }
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -203,7 +221,7 @@ fun SleepTrackerScreen(
             onClick = {
                 if (isTracking) {
                     viewModel.requestStop()
-                } else if (trackerPermissionsGranted) {
+                } else if (essentialPermissionsGranted && (!recordAudio || micGranted)) {
                     viewModel.startTracking()
                     Toast.makeText(context, "Tracking started", Toast.LENGTH_SHORT).show()
                 } else {
