@@ -235,13 +235,6 @@ fun MoreScreen(
             if (activeVoiceProfile != null) "Replace sample" else "Not set",
             onReEnroll
         )
-        SwitchRow(
-            Icons.Default.Mic,
-            "Use microphone for sleep staging",
-            "Helps when your phone is on the nightstand instead of the mattress",
-            micForStagingEnabled,
-            onCheckedChange = { scope.launch { prefs.setMicForStagingEnabled(it) } }
-        )
 
         Spacer(modifier = Modifier.height(24.dp))
         SectionHeader("Recording & detection")
@@ -272,6 +265,13 @@ fun MoreScreen(
                 }
                 if (enabled) context.startForegroundService(intent) else context.startService(intent)
             }
+        )
+        SwitchRow(
+            Icons.Default.Mic,
+            "Use microphone for sleep staging",
+            "Helps when your phone is on the nightstand instead of the mattress",
+            micForStagingEnabled,
+            onCheckedChange = { scope.launch { prefs.setMicForStagingEnabled(it) } }
         )
 
         Spacer(modifier = Modifier.height(24.dp))
