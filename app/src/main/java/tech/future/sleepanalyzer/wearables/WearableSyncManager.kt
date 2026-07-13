@@ -92,7 +92,8 @@ class WearableSyncManager(
             WearableMetric.RESTING_HEART_RATE,
             WearableMetric.HRV_RMSSD,
             WearableMetric.RESPIRATORY_RATE,
-            WearableMetric.SPO2
+            WearableMetric.SPO2,
+            WearableMetric.STEPS
         )
 
         /** Opt-in "Detailed health context" (#7) metrics, synced only when the user enables them. */

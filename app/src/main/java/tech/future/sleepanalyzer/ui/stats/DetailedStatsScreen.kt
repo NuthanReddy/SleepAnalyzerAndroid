@@ -24,6 +24,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import tech.future.sleepanalyzer.data.db.entity.SleepSession
 import tech.future.sleepanalyzer.ui.theme.*
+import tech.future.sleepanalyzer.util.formatSleepDuration
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -34,36 +35,35 @@ fun DetailedStatsScreen(
     val timeRange by viewModel.timeRange.collectAsStateWithLifecycle()
     val sessions by viewModel.sessions.collectAsStateWithLifecycle()
     val avgScore by viewModel.averageScore.collectAsStateWithLifecycle()
-    val avgDuration by viewModel.averageDuration.collectAsStateWithLifecycle()
+    val avgDuration by viewModel.averageDurationMs.collectAsStateWithLifecycle()
     val bestNight by viewModel.bestNight.collectAsStateWithLifecycle()
     val worstNight by viewModel.worstNight.collectAsStateWithLifecycle()
-    val avgDeepSleep by viewModel.averageDeepSleep.collectAsStateWithLifecycle()
+    val avgDeepSleep by viewModel.averageDeepSleepMs.collectAsStateWithLifecycle()
     val avgInterruptions by viewModel.averageInterruptions.collectAsStateWithLifecycle()
     val stepsStats by viewModel.stepsStats.collectAsStateWithLifecycle()
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Sleep Statistics") },
-                navigationIcon = {
-                    if (onBack != null) {
-                        IconButton(onClick = onBack) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
-                        }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp)
+            .verticalScroll(rememberScrollState())
+    ) {
+        Spacer(modifier = Modifier.height(16.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (onBack != null) {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                }
+            }
+            Text(
+                text = "Sleep Statistics",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold
             )
         }
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 16.dp)
-                .verticalScroll(rememberScrollState())
-        ) {
-            // Time range selector
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Time range selector
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -88,7 +88,7 @@ fun DetailedStatsScreen(
                 StatCard("Avg Score", avgScore?.let { "${it.toInt()}" } ?: "--", SleepScore, Modifier.weight(1f))
                 StatCard(
                     "Avg Duration",
-                    avgDuration?.let { "${it.toInt() / 60}h ${it.toInt() % 60}m" } ?: "--",
+                    avgDuration?.let { formatSleepDuration(it) } ?: "--",
                     SleepSecondary,
                     Modifier.weight(1f)
                 )
@@ -98,7 +98,7 @@ fun DetailedStatsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                StatCard("Avg Deep Sleep", "${avgDeepSleep}min", SleepDeep, Modifier.weight(1f))
+                StatCard("Avg Deep Sleep", formatSleepDuration(avgDeepSleep), SleepDeep, Modifier.weight(1f))
                 StatCard("Avg Interruptions", String.format("%.1f", avgInterruptions), SleepAwake, Modifier.weight(1f))
             }
             Spacer(modifier = Modifier.height(12.dp))
@@ -165,7 +165,6 @@ fun DetailedStatsScreen(
 
             Spacer(modifier = Modifier.height(32.dp))
         }
-    }
 }
 
 @Composable
@@ -222,12 +221,13 @@ fun DurationChart(sessions: List<SleepSession>) {
             .height(120.dp)
     ) {
         if (sessions.isEmpty()) return@Canvas
-        val maxDuration = 600f // 10 hours max
+        val durations = sessions.map { sessionElapsedMs(it) }
+        val maxDuration = (durations.maxOrNull() ?: 1L).coerceAtLeast(1L)
         val barWidth = size.width / (sessions.size * 2)
         val maxHeight = size.height
 
-        sessions.forEachIndexed { index, session ->
-            val barHeight = (session.durationMinutes / maxDuration) * maxHeight
+        durations.forEachIndexed { index, durationMs ->
+            val barHeight = (durationMs.toFloat() / maxDuration) * maxHeight
             val x = (index * 2 + 0.5f) * barWidth
             drawRoundRect(
                 color = SleepTertiary,
@@ -238,6 +238,11 @@ fun DurationChart(sessions: List<SleepSession>) {
         }
     }
 }
+
+/** Real elapsed time for a session, keeping sub-minute precision the stored minute column loses. */
+private fun sessionElapsedMs(session: SleepSession): Long =
+    ((session.endTime ?: (session.startTime + session.durationMinutes * 60_000L)) - session.startTime)
+        .coerceAtLeast(0L)
 
 @Composable
 fun HighlightCard(title: String, session: SleepSession) {
@@ -261,9 +266,8 @@ fun HighlightCard(title: String, session: SleepSession) {
                     fontWeight = FontWeight.Bold,
                     color = if (session.qualityScore >= 80) SleepScore else SleepAwake
                 )
-                val h = session.durationMinutes / 60
-                val m = session.durationMinutes % 60
-                Text("${h}h ${m}m", style = MaterialTheme.typography.bodySmall)
+                val durationMs = sessionElapsedMs(session)
+                Text(formatSleepDuration(durationMs), style = MaterialTheme.typography.bodySmall)
             }
         }
     }

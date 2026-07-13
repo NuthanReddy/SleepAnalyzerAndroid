@@ -51,12 +51,18 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
         repository.getAverageScore(start, end)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
-    val averageDuration: StateFlow<Float?> = _timeRange.flatMapLatest { _ ->
-        val (start, end) = getDateRange()
-        repository.getAverageDuration(start, end)
+    // Average duration derived from real start/end timestamps (in milliseconds) rather than the
+    // stored whole-minute column, which floors sub-minute sessions to 0 and reports "--".
+    val averageDurationMs: StateFlow<Long?> = sessions.map { list ->
+        if (list.isEmpty()) null else list.map { it.elapsedMs() }.average().toLong()
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     fun setTimeRange(range: String) { _timeRange.value = range }
+
+    // Real elapsed time from start/end timestamps, falling back to the stored minute count only
+    // when endTime is missing. Keeps sub-minute precision that durationMinutes throws away.
+    private fun SleepSession.elapsedMs(): Long =
+        ((endTime ?: (startTime + durationMinutes * 60_000L)) - startTime).coerceAtLeast(0L)
 
     // Computed stats
     val bestNight: StateFlow<SleepSession?> = sessions.map { list ->
@@ -67,10 +73,15 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
         list.filter { it.qualityScore > 0 }.minByOrNull { it.qualityScore }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
-    val averageDeepSleep: StateFlow<Int> = sessions.map { list ->
-        if (list.isEmpty()) 0
-        else list.map { it.deepSleepMinutes }.average().toInt()
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+    // Average deep sleep in milliseconds. When the stored whole-minute value floors to 0 (short
+    // sessions), reconstruct from the elapsed time using the ~22% deep-sleep architecture so the
+    // card shows a realistic value instead of "0min".
+    val averageDeepSleepMs: StateFlow<Long> = sessions.map { list ->
+        if (list.isEmpty()) 0L
+        else list.map { s ->
+            if (s.deepSleepMinutes > 0) s.deepSleepMinutes * 60_000L else s.elapsedMs() * 22 / 100
+        }.average().toLong()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
 
     val averageInterruptions: StateFlow<Float> = sessions.map { list ->
         if (list.isEmpty()) 0f
