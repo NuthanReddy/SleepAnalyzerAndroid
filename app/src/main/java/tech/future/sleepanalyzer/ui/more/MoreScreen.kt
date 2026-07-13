@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.ChevronRight
@@ -23,11 +22,9 @@ import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.List
-import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.Summarize
@@ -50,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 import tech.future.sleepanalyzer.data.prefs.AppPreferences
+import tech.future.sleepanalyzer.di.ServiceLocator
 import tech.future.sleepanalyzer.ui.theme.SleepSecondary
 
 @Composable
@@ -71,6 +69,7 @@ fun MoreScreen(
     val micForStagingEnabled by prefs.micForStagingEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
     val bedtimeAutoDetectEnabled by prefs.bedtimeAutoDetectEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
     val detailedHealthContextEnabled by prefs.detailedHealthContextEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
+    val goal by ServiceLocator.repository.getActiveGoal().collectAsStateWithLifecycle(initialValue = null)
     val versionName = remember(context) {
         runCatching {
             context.packageManager.getPackageInfo(context.packageName, 0).versionName
@@ -91,9 +90,18 @@ fun MoreScreen(
 
         Spacer(modifier = Modifier.height(28.dp))
         SectionHeader("General")
-        SettingsRow(Icons.Default.Flag, "Sleep Goal", "Not set", onNavigateToGoals)
+        SettingsRow(
+            Icons.Default.Flag,
+            "Sleep Goal",
+            goal?.let { g ->
+                val hours = g.targetDurationMinutes / 60
+                val minutes = g.targetDurationMinutes % 60
+                if (minutes == 0) "${hours}h" else "${hours}h ${minutes}m"
+            } ?: "Not set",
+            onNavigateToGoals
+        )
         SettingsRow(Icons.Default.MusicNote, "Sound", "Ambient", onNavigateToSounds)
-        SettingsRow(Icons.Default.Bedtime, "Smart Alarms", "30 min", onNavigateToAlarm)
+        SettingsRow(Icons.Default.Bedtime, "Smart Alarms", null, onNavigateToAlarm)
         SwitchRow(
             Icons.Default.Summarize,
             "Weekly report",
@@ -135,7 +143,6 @@ fun MoreScreen(
 
         Spacer(modifier = Modifier.height(24.dp))
         SectionHeader("Personal")
-        SettingsRow(Icons.Default.AccountCircle, "Account", null, onNavigateToSettings)
         SettingsRow(Icons.Default.Person, "About you", null, onNavigateToProfile)
         SettingsRow(Icons.Default.Lock, "Consent and privacy", null, onNavigateToPrivacy)
         SettingsRow(Icons.Default.FavoriteBorder, "Health Connect", "Not connected", onNavigateToSettings)
@@ -144,9 +151,7 @@ fun MoreScreen(
         SectionHeader("Alarm")
         SettingsRow(Icons.Default.Vibration, "Motion detection", "Accelerometer", onNavigateToSettings)
         SettingsRow(Icons.Default.GraphicEq, "Sound detection", "20 nights", onNavigateToSettings)
-        SettingsRow(Icons.Default.LocationOn, "Placement reminders", "On", onNavigateToSettings)
         SettingsRow(Icons.Default.Alarm, "Snooze", "Intelligent", onNavigateToAlarm)
-        SettingsRow(Icons.Default.Notifications, "Vibration", "As backup", onNavigateToAlarm)
         SettingsRow(Icons.Default.Warning, "Battery warning", "On", onNavigateToSettings)
 
         Spacer(modifier = Modifier.height(24.dp))
