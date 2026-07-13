@@ -58,6 +58,8 @@ class SleepTrackingService : Service(), SensorEventListener {
     private val awakeMinutes: Int get() = (awakeSeconds / 60L).toInt()
     private var lastStageCheckTime = 0L
     private val gravity = FloatArray(3)
+    private var lastGyroMagnitude = 0f
+    private val GYRO_MOTION_WEIGHT = 0.5f
 
     /** True when this service auto-started the recorder in signal-only mode (#13), so stop pairs it. */
     private var startedRecorderForStaging = false
@@ -67,6 +69,7 @@ class SleepTrackingService : Service(), SensorEventListener {
         const val ACTION_START = "start_tracking"
         const val ACTION_STOP = "stop_tracking"
         const val EXTRA_SESSION_ID = "session_id"
+        const val EXTRA_MOOD_AFTER = "mood_after"
 
         var isTracking = false
             private set
@@ -84,7 +87,7 @@ class SleepTrackingService : Service(), SensorEventListener {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> startTracking(intent)
-            ACTION_STOP -> stopTracking()
+            ACTION_STOP -> stopTracking(intent)
         }
         return START_STICKY
     }
@@ -102,6 +105,7 @@ class SleepTrackingService : Service(), SensorEventListener {
         remSleepSeconds = 0L
         awakeSeconds = 0L
         gravity.fill(0f)
+        lastGyroMagnitude = 0f
 
         createNotificationChannel()
         val notification = createNotification("Tracking your sleep...")
@@ -121,6 +125,10 @@ class SleepTrackingService : Service(), SensorEventListener {
         val motionSensor = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
             ?: sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         motionSensor?.let {
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL)
+        }
+        // Fuse rotational motion so tosses/turns that barely move the phone linearly still register.
+        sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)?.let {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL)
         }
 
@@ -185,7 +193,7 @@ class SleepTrackingService : Service(), SensorEventListener {
         }
     }
 
-    private fun stopTracking() {
+    private fun stopTracking(intent: Intent?) {
         // Flush one final estimate so the trailing interval since the last 30 s tick gets
         // attributed to a stage. Without this, sessions that stop mid-interval drop
         // 0-29 seconds of data on the floor.
@@ -210,27 +218,31 @@ class SleepTrackingService : Service(), SensorEventListener {
         }
 
         val endTime = System.currentTimeMillis()
-        val durationSec = ((endTime - startTime) / 1000L).coerceAtLeast(0L)
-        val durationMinutes = (durationSec / 60L).toInt()
-
-        // Fallback: if the estimator never produced useful data (very short session, no motion
-        // sensor data, or doze-suppressed events) attribute the duration with a typical adult
-        // sleep architecture so the user sees a meaningful breakdown AND a reasonable score:
-        //   ~22% deep, ~22% REM, ~51% light, ~5% awake (Walker, "Why We Sleep").
-        // Previously we wrote 0/0/0/0 (or 100% light) which made every test session show 35.
-        val totalStageSec = deepSleepSeconds + lightSleepSeconds + remSleepSeconds + awakeSeconds
-        if (totalStageSec < (durationSec / 4) && durationSec > 0) {
-            deepSleepSeconds = (durationSec * 22 / 100)
-            remSleepSeconds = (durationSec * 22 / 100)
-            awakeSeconds = (durationSec * 5 / 100)
-            lightSleepSeconds = durationSec - deepSleepSeconds - remSleepSeconds - awakeSeconds
-        }
+        val moodAfter = intent?.getStringExtra(EXTRA_MOOD_AFTER)
 
         serviceScope.launch {
             if (sessionId > 0) {
                 val profile = runCatching { repository.getUserProfile() }.getOrNull()
                 val session = repository.getSessionById(sessionId)
                 session?.let {
+                    // Duration from the persisted session start is authoritative and immune to the
+                    // service being restarted for ACTION_STOP (which would zero the in-memory start).
+                    val startedAt = if (it.startTime > 0) it.startTime else startTime
+                    val durationSec = ((endTime - startedAt) / 1000L).coerceAtLeast(0L)
+                    val durationMinutes = (durationSec / 60L).toInt()
+
+                    // Fallback: if the estimator never produced useful data (very short session, no
+                    // motion sensor data, or doze-suppressed events) attribute the duration with a
+                    // typical adult sleep architecture so the split always sums to the total:
+                    //   ~22% deep, ~22% REM, ~51% light, ~5% awake (Walker, "Why We Sleep").
+                    val totalStageSec = deepSleepSeconds + lightSleepSeconds + remSleepSeconds + awakeSeconds
+                    if (totalStageSec < (durationSec / 4) && durationSec > 0) {
+                        deepSleepSeconds = durationSec * 22 / 100
+                        remSleepSeconds = durationSec * 22 / 100
+                        awakeSeconds = durationSec * 5 / 100
+                        lightSleepSeconds = durationSec - deepSleepSeconds - remSleepSeconds - awakeSeconds
+                    }
+
                     val score = tech.future.sleepanalyzer.sleep.SleepQualityScorer.calculate(
                         durationMinutes = durationMinutes,
                         interruptions = interruptionCount,
@@ -248,6 +260,7 @@ class SleepTrackingService : Service(), SensorEventListener {
                         remSleepMinutes = remSleepMinutes,
                         awakeMinutes = awakeMinutes,
                         interruptions = interruptionCount,
+                        moodAfter = moodAfter ?: it.moodAfter,
                         isTracking = false
                     )
                     repository.updateSession(updated)
@@ -261,22 +274,34 @@ class SleepTrackingService : Service(), SensorEventListener {
     }
 
     override fun onSensorChanged(event: SensorEvent) {
-        if (event.sensor.type == Sensor.TYPE_LINEAR_ACCELERATION) {
-            val magnitude = sqrt(
-                event.values[0] * event.values[0] +
-                    event.values[1] * event.values[1] +
-                    event.values[2] * event.values[2]
-            )
-            processMagnitude(magnitude)
-        } else if (event.sensor.type == Sensor.TYPE_ACCELEROMETER) {
-            val alpha = 0.8f
-            for (i in 0..2) {
-                gravity[i] = alpha * gravity[i] + (1 - alpha) * event.values[i]
+        when (event.sensor.type) {
+            Sensor.TYPE_GYROSCOPE -> {
+                // Angular speed (rad/s); cached and blended into the next accel sample.
+                lastGyroMagnitude = sqrt(
+                    event.values[0] * event.values[0] +
+                        event.values[1] * event.values[1] +
+                        event.values[2] * event.values[2]
+                )
             }
-            val linearX = event.values[0] - gravity[0]
-            val linearY = event.values[1] - gravity[1]
-            val linearZ = event.values[2] - gravity[2]
-            processMagnitude(sqrt(linearX * linearX + linearY * linearY + linearZ * linearZ))
+            Sensor.TYPE_LINEAR_ACCELERATION -> {
+                val magnitude = sqrt(
+                    event.values[0] * event.values[0] +
+                        event.values[1] * event.values[1] +
+                        event.values[2] * event.values[2]
+                )
+                processMagnitude(magnitude + GYRO_MOTION_WEIGHT * lastGyroMagnitude)
+            }
+            Sensor.TYPE_ACCELEROMETER -> {
+                val alpha = 0.8f
+                for (i in 0..2) {
+                    gravity[i] = alpha * gravity[i] + (1 - alpha) * event.values[i]
+                }
+                val linearX = event.values[0] - gravity[0]
+                val linearY = event.values[1] - gravity[1]
+                val linearZ = event.values[2] - gravity[2]
+                val magnitude = sqrt(linearX * linearX + linearY * linearY + linearZ * linearZ)
+                processMagnitude(magnitude + GYRO_MOTION_WEIGHT * lastGyroMagnitude)
+            }
         }
     }
 

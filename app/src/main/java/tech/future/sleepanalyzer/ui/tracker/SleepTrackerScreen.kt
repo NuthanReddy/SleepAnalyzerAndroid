@@ -86,6 +86,7 @@ import tech.future.sleepanalyzer.ui.theme.SleepSecondary
 import tech.future.sleepanalyzer.ui.theme.SleepSurface
 import tech.future.sleepanalyzer.ui.theme.SleepSurfaceVariant
 import tech.future.sleepanalyzer.util.PermissionsUtil
+import tech.future.sleepanalyzer.util.formatSleepDuration
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -560,8 +561,8 @@ fun RecentSessionCard(
             session.date
         }
     }
-    val hours = session.durationMinutes / 60
-    val mins = session.durationMinutes % 60
+    val durationMs = ((session.endTime ?: (session.startTime + session.durationMinutes * 60_000L)) -
+        session.startTime).coerceAtLeast(0L)
 
     Card(
         modifier = Modifier
@@ -591,7 +592,7 @@ fun RecentSessionCard(
                 }
             )
             Text(
-                text = "${hours}h ${mins}m",
+                text = formatSleepDuration(durationMs),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

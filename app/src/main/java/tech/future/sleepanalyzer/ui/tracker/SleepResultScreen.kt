@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -73,6 +74,9 @@ import tech.future.sleepanalyzer.ui.theme.SleepSecondary
 import tech.future.sleepanalyzer.ui.theme.SleepSurfaceVariant
 import tech.future.sleepanalyzer.wearables.HealthContextInsight
 import tech.future.sleepanalyzer.wearables.WearableMetric
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -120,12 +124,26 @@ fun SleepResultScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Sleep Report") },
+                title = {
+                    val timeFormat = remember { SimpleDateFormat("h:mm a", Locale.getDefault()) }
+                    val current = session
+                    val titleText = when {
+                        current == null -> "Sleep Report"
+                        current.endTime != null ->
+                            "${timeFormat.format(Date(current.startTime))} – " +
+                                timeFormat.format(Date(current.endTime))
+                        else -> timeFormat.format(Date(current.startTime))
+                    }
+                    Text(titleText)
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
+                // MainActivity's Scaffold already pads for the status bar; without this the app bar
+                // would add a second status-bar inset, leaving a large dead gap above the title.
+                windowInsets = WindowInsets(0, 0, 0, 0),
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = Color.Transparent,
                     titleContentColor = MaterialTheme.colorScheme.onBackground
@@ -142,7 +160,6 @@ fun SleepResultScreen(
                     .verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Spacer(modifier = Modifier.height(16.dp))
                 ScoreCircle(score = currentSession.qualityScore)
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
@@ -153,9 +170,11 @@ fun SleepResultScreen(
                 )
                 Spacer(modifier = Modifier.height(24.dp))
 
-                val hours = currentSession.durationMinutes / 60
-                val mins = currentSession.durationMinutes % 60
-                SummaryCard("Duration", "${hours}h ${mins}m")
+                // Duration straight from the tracked timestamps so short (sub-minute) sessions still
+                // read a real value instead of flooring to "0h 0m".
+                val durationMs = ((currentSession.endTime ?: System.currentTimeMillis()) -
+                    currentSession.startTime).coerceAtLeast(0L)
+                SummaryCard("Duration", formatDuration(durationMs))
                 Spacer(modifier = Modifier.height(12.dp))
 
                 if (vendorStageSegments.isNotEmpty()) {
@@ -430,12 +449,26 @@ private fun resolveStageBreakdown(
     vendorStageSegments: List<VendorStageSegment>,
     sessionEndMs: Long
 ): StageBreakdown {
-    val heuristic = StageBreakdown(
+    val elapsedMs = ((session.endTime ?: sessionEndMs) - session.startTime).coerceAtLeast(0L)
+    var heuristic = StageBreakdown(
         deepMs = session.deepSleepMinutes * MILLIS_PER_MINUTE,
         lightMs = session.lightSleepMinutes * MILLIS_PER_MINUTE,
         remMs = session.remSleepMinutes * MILLIS_PER_MINUTE,
         awakeMs = session.awakeMinutes * MILLIS_PER_MINUTE
     )
+    // Whole-minute persistence floors sub-minute buckets to 0, so short sessions would otherwise
+    // render an empty split with every stage at "0h 0m". When the stored stages sum to well under
+    // the real elapsed time, rebuild an ms-precision breakdown from the duration using typical
+    // adult sleep architecture (~22% deep, ~22% REM, ~5% awake, remainder light) — mirroring the
+    // tracking service's own fallback.
+    val storedStageMs = heuristic.deepMs + heuristic.lightMs + heuristic.remMs + heuristic.awakeMs
+    if (elapsedMs > 0L && storedStageMs < elapsedMs / 2) {
+        val deep = elapsedMs * 22 / 100
+        val rem = elapsedMs * 22 / 100
+        val awake = elapsedMs * 5 / 100
+        val light = (elapsedMs - deep - rem - awake).coerceAtLeast(0L)
+        heuristic = StageBreakdown(deepMs = deep, lightMs = light, remMs = rem, awakeMs = awake)
+    }
     if (vendorStageSegments.isEmpty()) return heuristic
 
     val stageDurations = mutableMapOf<SleepStage, Long>()
@@ -460,8 +493,15 @@ private fun resolveStageBreakdown(
 }
 
 private fun formatDuration(durationMs: Long): String {
-    val totalMinutes = (durationMs / MILLIS_PER_MINUTE).toInt()
-    return "${totalMinutes / 60}h ${totalMinutes % 60}m"
+    val totalSec = (durationMs / 1000L).coerceAtLeast(0L)
+    val h = totalSec / 3600
+    val m = (totalSec % 3600) / 60
+    val s = totalSec % 60
+    return when {
+        h > 0 -> "${h}h ${m}m"
+        m > 0 -> "${m}m ${s}s"
+        else -> "${s}s"
+    }
 }
 
 @Composable

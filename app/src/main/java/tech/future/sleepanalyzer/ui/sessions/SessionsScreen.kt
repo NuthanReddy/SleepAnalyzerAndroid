@@ -33,6 +33,7 @@ import tech.future.sleepanalyzer.ui.theme.SleepAwake
 import tech.future.sleepanalyzer.ui.theme.SleepLight
 import tech.future.sleepanalyzer.ui.theme.SleepScore
 import tech.future.sleepanalyzer.ui.theme.SleepSecondary
+import tech.future.sleepanalyzer.util.formatSleepDuration
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -101,8 +102,8 @@ private fun SessionCard(
 ) {
     val dateFormat = remember { SimpleDateFormat("EEE, MMM d", Locale.getDefault()) }
     val timeFormat = remember { SimpleDateFormat("h:mm a", Locale.getDefault()) }
-    val hours = session.durationMinutes / 60
-    val mins = session.durationMinutes % 60
+    val durationMs = ((session.endTime ?: (session.startTime + session.durationMinutes * 60_000L)) -
+        session.startTime).coerceAtLeast(0L)
     val scoreColor = when {
         session.qualityScore >= 80 -> SleepScore
         session.qualityScore >= 60 -> SleepSecondary
@@ -131,7 +132,7 @@ private fun SessionCard(
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = "${timeFormat.format(Date(session.startTime))}  ·  ${hours}h ${mins}m",
+                    text = "${timeFormat.format(Date(session.startTime))}  ·  ${formatSleepDuration(durationMs)}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

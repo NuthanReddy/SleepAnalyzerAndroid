@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.Summarize
+import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -141,7 +142,7 @@ fun MoreScreen(
 
         Spacer(modifier = Modifier.height(24.dp))
         SectionHeader("Alarm")
-        SettingsRow(Icons.Default.Mic, "Motion detection", "Microphone", onNavigateToSettings)
+        SettingsRow(Icons.Default.Vibration, "Motion detection", "Accelerometer", onNavigateToSettings)
         SettingsRow(Icons.Default.GraphicEq, "Sound detection", "20 nights", onNavigateToSettings)
         SettingsRow(Icons.Default.LocationOn, "Placement reminders", "On", onNavigateToSettings)
         SettingsRow(Icons.Default.Alarm, "Snooze", "Intelligent", onNavigateToAlarm)
@@ -152,7 +153,6 @@ fun MoreScreen(
         SectionHeader("Other")
         SettingsRow(Icons.Default.List, "Database", "Export CSV", onNavigateToSettings)
         SettingsRow(Icons.Default.SportsEsports, "Alertness game", null, onNavigateToGame)
-        SettingsRow(Icons.Default.Mic, "Sleep recorder", null, onNavigateToRecorder)
         SettingsRow(Icons.Default.Info, "Third-party software", null, onNavigateToPrivacy)
 
         Spacer(modifier = Modifier.height(24.dp))

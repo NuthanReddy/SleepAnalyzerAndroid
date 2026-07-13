@@ -175,16 +175,13 @@ class SleepTrackerViewModel(application: Application) : AndroidViewModel(applica
     private suspend fun stopTrackingInternal(): Long? {
         val sessionId = _currentSessionId.value
 
-        sessionId?.let { id ->
-            val session = repository.getSessionById(id)
-            session?.let {
-                repository.updateSession(it.copy(moodAfter = _moodAfter.value))
-            }
-        }
-
+        // The service is the single writer of the final session row (endTime, duration, stages,
+        // score, mood). We hand it moodAfter via the intent instead of writing a stale full-row
+        // copy here — doing both raced and could overwrite the service's duration/stages with 0.
         val app = getApplication<Application>()
         val intent = Intent(app, SleepTrackingService::class.java).apply {
             action = SleepTrackingService.ACTION_STOP
+            _moodAfter.value?.let { putExtra(SleepTrackingService.EXTRA_MOOD_AFTER, it) }
         }
         app.startService(intent)
 
