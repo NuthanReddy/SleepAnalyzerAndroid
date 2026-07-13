@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
+import android.os.BatteryManager
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.compose.animation.core.RepeatMode
@@ -116,6 +117,22 @@ fun SleepTrackerScreen(
     // from the permission *result* rather than a state key (notifications) that is already
     // satisfied — which would otherwise start tracking before the mic dialog is even answered.
     val awaitingPermissionForStart = remember { mutableStateOf(false) }
+    // Low-battery guard: if the phone is nearly empty when the user starts a night, warn them to
+    // plug in first. There's no persisted "Battery warning" preference yet, so the guard defaults
+    // on. The check fails open (starts normally) if the battery level can't be read.
+    val batteryWarningEnabled = true
+    var showLowBatteryDialog by remember { mutableStateOf(false) }
+    var pendingStart by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val startWithBatteryGuard: (() -> Unit) -> Unit = { start ->
+        val bm = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+        val pct = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 100
+        if (batteryWarningEnabled && pct in 0..19) {
+            pendingStart = start
+            showLowBatteryDialog = true
+        } else {
+            start()
+        }
+    }
     val perms = rememberMultiplePermissionsState(trackerPermissions) { result ->
         if (awaitingPermissionForStart.value) {
             awaitingPermissionForStart.value = false
@@ -124,13 +141,15 @@ fun SleepTrackerScreen(
                 .all { it.value }
             if (essentialOk) {
                 val micOk = result[Manifest.permission.RECORD_AUDIO] == true
-                viewModel.startTracking()
-                val msg = if (recordAudioLatest.value && !micOk) {
-                    "Tracking started — mic denied, audio won't be recorded"
-                } else {
-                    "Tracking started"
+                startWithBatteryGuard {
+                    viewModel.startTracking()
+                    val msg = if (recordAudioLatest.value && !micOk) {
+                        "Tracking started — mic denied, audio won't be recorded"
+                    } else {
+                        "Tracking started"
+                    }
+                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                 }
-                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -231,8 +250,10 @@ fun SleepTrackerScreen(
                 if (isTracking) {
                     viewModel.requestStop()
                 } else if (essentialPermissionsGranted && (!recordAudio || micGranted)) {
-                    viewModel.startTracking()
-                    Toast.makeText(context, "Tracking started", Toast.LENGTH_SHORT).show()
+                    startWithBatteryGuard {
+                        viewModel.startTracking()
+                        Toast.makeText(context, "Tracking started", Toast.LENGTH_SHORT).show()
+                    }
                 } else {
                     awaitingPermissionForStart.value = true
                     perms.launchMultiplePermissionRequest()
@@ -285,6 +306,35 @@ fun SleepTrackerScreen(
         MoodSelectorDialog(
             onSelect = { viewModel.selectMood(it) },
             onDismiss = { viewModel.dismissMoodSelector() }
+        )
+    }
+
+    if (showLowBatteryDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showLowBatteryDialog = false
+                pendingStart = null
+            },
+            title = { Text("Low battery") },
+            text = { Text("Connect your phone to a charger before you start.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showLowBatteryDialog = false
+                    val action = pendingStart
+                    pendingStart = null
+                    action?.invoke()
+                }) {
+                    Text("Start anyway")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showLowBatteryDialog = false
+                    pendingStart = null
+                }) {
+                    Text("Cancel")
+                }
+            }
         )
     }
 }
