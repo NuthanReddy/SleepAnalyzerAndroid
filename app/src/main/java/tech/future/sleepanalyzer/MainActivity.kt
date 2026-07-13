@@ -48,7 +48,6 @@ import tech.future.sleepanalyzer.ui.programs.SleepProgramsScreen
 import tech.future.sleepanalyzer.ui.recorder.RecorderScreen
 import tech.future.sleepanalyzer.ui.sessions.SessionsScreen
 import tech.future.sleepanalyzer.ui.settings.PrivacyScreen
-import tech.future.sleepanalyzer.ui.settings.SettingsScreen
 import tech.future.sleepanalyzer.ui.sounds.SoundPlayerScreen
 import tech.future.sleepanalyzer.ui.sounds.SoundsLibraryScreen
 import tech.future.sleepanalyzer.ui.stats.DetailedStatsScreen
@@ -128,7 +127,6 @@ fun SleepAnalyzerApp(
     val noBottomBarRoutes = setOf(
         Screen.Onboarding.route,
         Screen.VoiceEnroll.route,
-        Screen.Settings.route,
         Screen.Profile.route,
         Screen.Signup.route
     )
@@ -190,25 +188,6 @@ fun SleepAnalyzerApp(
                 VoiceEnrollScreen(onBack = { navController.popBackStack() })
             }
 
-            composable(Screen.Settings.route) {
-                SettingsScreen(
-                    onBack = { navController.popBackStack() },
-                    onReEnroll = { navController.navigate(Screen.VoiceEnroll.route) },
-                    onOpenProfile = { navController.navigate(Screen.Profile.route) },
-                    onOpenSignup = { navController.navigate(Screen.Signup.route) },
-                    onOpenPrivacy = { navController.navigate(Screen.Privacy.route) },
-                    onSignedOut = { goHome ->
-                        onSignedOut()
-                        if (goHome) {
-                            navController.navigate(Screen.Track.route) {
-                                popUpTo(Screen.Track.route) { inclusive = false }
-                                launchSingleTop = true
-                            }
-                        }
-                    }
-                )
-            }
-
             composable(Screen.Profile.route) {
                 ProfileEditorScreen(onBack = { navController.popBackStack() })
             }
@@ -255,11 +234,10 @@ fun SleepAnalyzerApp(
                     onNavigateToGoals = { navController.navigate(Screen.Goals.route) },
                     onNavigateToSounds = { navController.navigate(Screen.Sounds.route) },
                     onNavigateToAlarm = { navController.navigate(Screen.Alarm.route) },
-                    onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
                     onNavigateToProfile = { navController.navigate(Screen.Profile.route) },
                     onNavigateToPrivacy = { navController.navigate(Screen.Privacy.route) },
                     onNavigateToGame = { navController.navigate(Screen.Game.route) },
-                    onNavigateToRecorder = { navController.navigate(Screen.Recorder.route) }
+                    onReEnroll = { navController.navigate(Screen.VoiceEnroll.route) }
                 )
             }
 
