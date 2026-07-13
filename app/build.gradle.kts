@@ -24,6 +24,12 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // The on-device sound model (YAMNet, TFLite) ships arm libs only; most phones are arm.
+        // Limiting ABIs keeps the APK from carrying x86 TensorFlow Lite binaries it will never use.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     buildTypes {
@@ -52,6 +58,10 @@ android {
     }
     buildFeatures {
         compose = true
+    }
+    androidResources {
+        // TFLite models must stay uncompressed so they can be memory-mapped at runtime.
+        noCompress += "tflite"
     }
 }
 
@@ -86,6 +96,9 @@ dependencies {
     // Offline on-device speech-to-text for transcribing "talk" recordings. The acoustic model is
     // downloaded on first use (see VoskTranscriber) rather than bundled, to keep the APK small.
     implementation("com.alphacephei:vosk-android:0.3.75")
+    // On-device sound classification (snore/cough/talk) with YAMNet via the TFLite Task Library.
+    // The ~4 MB model is bundled in assets so detection works offline from first launch.
+    implementation(libs.tensorflow.lite.task.audio)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

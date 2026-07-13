@@ -24,3 +24,9 @@
 
 # Keep Compose generated lambdas - already handled by AGP but be safe
 -keep class androidx.compose.runtime.** { *; }
+
+# TensorFlow Lite + Task Library (YAMNet sound classifier). JNI-bound classes must survive R8.
+-keep class org.tensorflow.lite.** { *; }
+-keep class org.tensorflow.lite.support.** { *; }
+-keep class org.tensorflow.lite.task.** { *; }
+-dontwarn org.tensorflow.lite.**

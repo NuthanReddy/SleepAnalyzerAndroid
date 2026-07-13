@@ -276,7 +276,7 @@ class AudioRecorderService : Service() {
         val featureVec = FeatureVector(bandEnergies = FloatArray(13))
         features.extract(cropped.pcm, 0, cropped.pcm.size, featureVec)
 
-        val classification = classifier.classify(featureVec)
+        val classification = classifier.classify(cropped.pcm, 0, cropped.pcm.size, sampleRate, featureVec)
         if (classification.type == AudioEventType.SILENCE) return
         if (classification.type == AudioEventType.UNKNOWN && classification.confidence < UNKNOWN_CONFIDENCE_THRESHOLD) {
             return

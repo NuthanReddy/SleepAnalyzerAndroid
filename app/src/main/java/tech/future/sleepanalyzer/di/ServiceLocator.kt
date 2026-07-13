@@ -44,7 +44,7 @@ object ServiceLocator {
     val dataRequestRepository: DataRequestRepository by lazy { DataRequestRepository(authRepository, preferences) }
 
     /** Per-call factory to allow user prefs to switch backends without restart. */
-    fun classifier(): AudioClassifier = ClassifierFactory.create()
+    fun classifier(): AudioClassifier = ClassifierFactory.create(requireContext())
 
     suspend fun voiceMatcher(): VoiceMatcher {
         val enabled = preferences.voiceIsolationEnabledFlow.firstOrNull() ?: false
