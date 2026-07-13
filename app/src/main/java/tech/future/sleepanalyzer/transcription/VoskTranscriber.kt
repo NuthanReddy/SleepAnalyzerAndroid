@@ -1,6 +1,10 @@
 package tech.future.sleepanalyzer.transcription
 
 import android.content.Context
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaFormat
+import androidx.annotation.VisibleForTesting
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -11,6 +15,7 @@ import org.vosk.LibVosk
 import org.vosk.Model
 import org.vosk.Recognizer
 import java.io.BufferedInputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.RandomAccessFile
@@ -48,15 +53,16 @@ object VoskTranscriber {
     fun isModelReady(context: Context): Boolean = resolvedModelDir(context)?.exists() == true
 
     /**
-     * Transcribes the WAV file at [filePath]. Returns the recognized text (possibly empty if no
-     * speech was detected). Runs on [Dispatchers.IO]. Throws [TranscriptionException] on failure.
+     * Transcribes the recording at [filePath] (WAV or the recorder's default AAC/M4A). Returns the
+     * recognized text (possibly empty if no speech was detected). Runs on [Dispatchers.IO]. Throws
+     * [TranscriptionException] on failure.
      */
     suspend fun transcribe(context: Context, filePath: String): String = withContext(Dispatchers.IO) {
         val file = File(filePath)
         if (!file.exists()) throw TranscriptionException("Recording file not found")
 
         val loadedModel = ensureModel(context)
-        val (samples, sampleRate) = readWavPcm(file)
+        val (samples, sampleRate) = readPcm(file)
         val resampled = if (sampleRate == TARGET_SAMPLE_RATE.toInt()) samples
             else resampleLinear(samples, sampleRate, TARGET_SAMPLE_RATE.toInt())
 
@@ -143,6 +149,142 @@ object VoskTranscriber {
             throw TranscriptionException("Could not download speech model", t)
         } finally {
             zipFile.delete()
+        }
+    }
+
+    /**
+     * Reads mono 16-bit PCM (and its sample rate) from any recording the app produces. WAV files
+     * take the fast RIFF path; everything else (e.g. AAC/M4A, the default recorder format) is
+     * decoded with the platform codecs. This keeps transcription working regardless of the encoder
+     * chosen by [tech.future.sleepanalyzer.audio.encoder.EncoderFactory].
+     */
+    @VisibleForTesting
+    internal fun readPcm(file: File): Pair<ShortArray, Int> =
+        if (isRiffWave(file)) readWavPcm(file) else decodeToPcm(file)
+
+    /** Cheap magic-byte check so we only take the WAV fast path for real RIFF/WAVE files. */
+    private fun isRiffWave(file: File): Boolean = try {
+        FileInputStream(file).use { input ->
+            val head = ByteArray(12)
+            input.read(head) >= 12 &&
+                String(head, 0, 4) == "RIFF" &&
+                String(head, 8, 4) == "WAVE"
+        }
+    } catch (_: Throwable) {
+        false
+    }
+
+    /**
+     * Decodes a compressed recording (AAC inside an M4A/MP4 container, etc.) to mono 16-bit PCM
+     * using [MediaExtractor] + [MediaCodec]. Stereo output is down-mixed to mono by averaging.
+     */
+    private fun decodeToPcm(file: File): Pair<ShortArray, Int> {
+        val extractor = MediaExtractor()
+        try {
+            extractor.setDataSource(file.absolutePath)
+        } catch (t: Throwable) {
+            extractor.release()
+            throw TranscriptionException("Could not open recording", t)
+        }
+
+        var trackIndex = -1
+        for (i in 0 until extractor.trackCount) {
+            val mime = extractor.getTrackFormat(i).getString(MediaFormat.KEY_MIME)
+            if (mime != null && mime.startsWith("audio/")) { trackIndex = i; break }
+        }
+        if (trackIndex < 0) {
+            extractor.release()
+            throw TranscriptionException("No audio track in recording")
+        }
+        extractor.selectTrack(trackIndex)
+
+        val inputFormat = extractor.getTrackFormat(trackIndex)
+        val mime = inputFormat.getString(MediaFormat.KEY_MIME)
+            ?: run { extractor.release(); throw TranscriptionException("Unknown audio format") }
+        var sampleRate = inputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+        var channels = if (inputFormat.containsKey(MediaFormat.KEY_CHANNEL_COUNT))
+            inputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT) else 1
+
+        val codec = MediaCodec.createDecoderByType(mime)
+        val mono = ByteArrayOutputStream()
+        val info = MediaCodec.BufferInfo()
+        val timeoutUs = 10_000L
+        try {
+            codec.configure(inputFormat, null, null, 0)
+            codec.start()
+            var inputDone = false
+            var outputDone = false
+            while (!outputDone) {
+                if (!inputDone) {
+                    val inId = codec.dequeueInputBuffer(timeoutUs)
+                    if (inId >= 0) {
+                        val inBuf = codec.getInputBuffer(inId)!!
+                        val sampleSize = extractor.readSampleData(inBuf, 0)
+                        if (sampleSize < 0) {
+                            codec.queueInputBuffer(inId, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            inputDone = true
+                        } else {
+                            codec.queueInputBuffer(inId, 0, sampleSize, extractor.sampleTime, 0)
+                            extractor.advance()
+                        }
+                    }
+                }
+
+                when (val outId = codec.dequeueOutputBuffer(info, timeoutUs)) {
+                    MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        val outFormat = codec.outputFormat
+                        if (outFormat.containsKey(MediaFormat.KEY_SAMPLE_RATE))
+                            sampleRate = outFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                        if (outFormat.containsKey(MediaFormat.KEY_CHANNEL_COUNT))
+                            channels = outFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                    }
+                    MediaCodec.INFO_TRY_AGAIN_LATER -> { /* no output yet */ }
+                    else -> if (outId >= 0) {
+                        if (info.size > 0 && (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0) {
+                            val outBuf = codec.getOutputBuffer(outId)!!
+                            outBuf.position(info.offset)
+                            outBuf.limit(info.offset + info.size)
+                            appendMono(outBuf.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer(), channels, mono)
+                        }
+                        codec.releaseOutputBuffer(outId, false)
+                        if ((info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) outputDone = true
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            throw TranscriptionException("Could not decode recording", t)
+        } finally {
+            runCatching { codec.stop() }
+            runCatching { codec.release() }
+            extractor.release()
+        }
+
+        val bytes = mono.toByteArray()
+        val shorts = ShortArray(bytes.size / 2)
+        ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(shorts)
+        if (shorts.isEmpty()) throw TranscriptionException("No PCM data in recording")
+        return shorts to sampleRate
+    }
+
+    /** Down-mixes an interleaved 16-bit frame to mono and appends it as little-endian bytes. */
+    private fun appendMono(frame: java.nio.ShortBuffer, channels: Int, out: ByteArrayOutputStream) {
+        val samples = ShortArray(frame.remaining())
+        frame.get(samples)
+        if (channels <= 1) {
+            for (s in samples) {
+                out.write(s.toInt() and 0xFF)
+                out.write((s.toInt() shr 8) and 0xFF)
+            }
+        } else {
+            var i = 0
+            while (i + channels <= samples.size) {
+                var acc = 0
+                for (c in 0 until channels) acc += samples[i + c].toInt()
+                val m = (acc / channels).coerceIn(-32768, 32767)
+                out.write(m and 0xFF)
+                out.write((m shr 8) and 0xFF)
+                i += channels
+            }
         }
     }
 
