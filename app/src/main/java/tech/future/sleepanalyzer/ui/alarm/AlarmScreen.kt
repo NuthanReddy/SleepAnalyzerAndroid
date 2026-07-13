@@ -9,15 +9,19 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
@@ -114,6 +118,7 @@ fun AlarmScreen(
     }
 
     Scaffold(
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
         floatingActionButton = {
             FloatingActionButton(
@@ -368,21 +373,30 @@ fun AlarmEditorDialog(viewModel: AlarmViewModel) {
         onDismissRequest = { viewModel.onDismissEditor() },
         title = { Text(if (selectedAlarm == null) "New Alarm" else "Edit Alarm") },
         text = {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                item {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(20.dp)
+            ) {
+                // (a) Time picker
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
                     TimePicker(state = timePickerState)
                 }
-                item {
-                    OutlinedTextField(
-                        value = label,
-                        onValueChange = { viewModel.onLabelChanged(it) },
-                        label = { Text("Label") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-                item {
+
+                OutlinedTextField(
+                    value = label,
+                    onValueChange = { viewModel.onLabelChanged(it) },
+                    label = { Text("Label") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // (b) Repeat-days selector
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Repeat", style = MaterialTheme.typography.titleSmall)
-                    Spacer(modifier = Modifier.height(4.dp))
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         dayNames.forEachIndexed { index, name ->
                             val dayNum = index + 1
@@ -396,59 +410,41 @@ fun AlarmEditorDialog(viewModel: AlarmViewModel) {
                         }
                     }
                 }
-                item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Smart wake", style = MaterialTheme.typography.titleSmall)
-                            Text(
-                                "Wake within the window at light sleep",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Switch(
+
+                // (c) Grouped toggles
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        AlarmToggleRow(
+                            title = "Smart wake",
+                            description = "Wake within the window at light sleep",
                             checked = useSmartWake,
                             onCheckedChange = { viewModel.onUseSmartWakeChanged(it) }
                         )
+                        Text(
+                            if (useSmartWake) "Wake-up window: $wakeWindow min" else "Wake-up window: Fires exactly at the set time",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (useSmartWake) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Slider(
+                            value = wakeWindow.toFloat(),
+                            onValueChange = { viewModel.onWakeWindowChanged(it.toInt()) },
+                            valueRange = 0f..90f,
+                            steps = 5,
+                            enabled = useSmartWake
+                        )
                     }
-                }
-                item {
-                    Text(
-                        if (useSmartWake) "Wake-up window: $wakeWindow min" else "Wake-up window: Fires exactly at the set time",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = if (useSmartWake) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+
+                    AlarmToggleRow(
+                        title = "Vibration",
+                        checked = vibration,
+                        onCheckedChange = { viewModel.onVibrationChanged(it) }
                     )
-                    Slider(
-                        value = wakeWindow.toFloat(),
-                        onValueChange = { viewModel.onWakeWindowChanged(it.toInt()) },
-                        valueRange = 0f..90f,
-                        steps = 5,
-                        enabled = useSmartWake
+
+                    AlarmToggleRow(
+                        title = "Snooze",
+                        checked = snooze,
+                        onCheckedChange = { viewModel.onSnoozeChanged(it) }
                     )
-                }
-                item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Vibration")
-                        Switch(checked = vibration, onCheckedChange = { viewModel.onVibrationChanged(it) })
-                    }
-                }
-                item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Snooze")
-                        Switch(checked = snooze, onCheckedChange = { viewModel.onSnoozeChanged(it) })
-                    }
                 }
             }
         },
@@ -463,4 +459,34 @@ fun AlarmEditorDialog(viewModel: AlarmViewModel) {
             }
         }
     )
+}
+
+@Composable
+private fun AlarmToggleRow(
+    title: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    description: String? = null
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            if (description != null) {
+                Text(
+                    description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange
+        )
+    }
 }
