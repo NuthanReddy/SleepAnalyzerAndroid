@@ -38,10 +38,10 @@ import tech.future.sleepanalyzer.audio.pipeline.AudioPipeline
 import tech.future.sleepanalyzer.audio.processing.AudioCropper
 import tech.future.sleepanalyzer.audio.processing.AudioFeatures
 import tech.future.sleepanalyzer.audio.processing.BandPassFilter
+import tech.future.sleepanalyzer.audio.processing.SpectralNoiseReducer
 import tech.future.sleepanalyzer.audio.processing.VoiceActivityDetector
 import tech.future.sleepanalyzer.audio.source.AudioRecordSource
 import tech.future.sleepanalyzer.audio.source.AudioSource
-import tech.future.sleepanalyzer.audio.source.DenoisingAudioSource
 import tech.future.sleepanalyzer.audio.util.ShortRingBuffer
 import tech.future.sleepanalyzer.data.db.entity.AudioRecording
 import tech.future.sleepanalyzer.data.prefs.AppPreferences
@@ -165,15 +165,12 @@ class AudioRecorderService : Service() {
             try {
                 sessionId = ServiceLocator.repository.getActiveSession()?.id
 
-                val baseSource = AudioRecordSource(sampleRate = Constants.AUDIO_SAMPLE_RATE)
-                // Strip steady background noise (AC/fan/hum) before the ring buffer, VAD, and
-                // classifier see anything, so snore/talk/cough detection works against a clean
-                // signal. On by default; users can turn it off in Settings.
-                val denoise = runCatching {
-                    ServiceLocator.preferences.noiseReductionEnabledFlow.first()
-                }.getOrDefault(true)
-                val source: AudioSource =
-                    if (denoise) DenoisingAudioSource(baseSource) else baseSource
+                // Feed the RAW mic signal to the ring buffer, VAD, classifier, and event trigger.
+                // A cough is a broadband transient that a spectral denoiser suppresses, so denoising
+                // here would drop the event or classify it as SILENCE / low-confidence UNKNOWN.
+                // Noise reduction is instead applied only to the cropped PCM we save for playback
+                // (see commitEvent), so detection stays on the original, un-suppressed signal.
+                val source: AudioSource = AudioRecordSource(sampleRate = Constants.AUDIO_SAMPLE_RATE)
                 val classifier = ServiceLocator.classifier()
                 val voiceMatcher = ServiceLocator.voiceMatcher()
                 val encoder = ServiceLocator.encoder()
@@ -310,13 +307,36 @@ class AudioRecorderService : Service() {
             .format(Date(event.voiceStartMs))
         val primaryFile = File(recordingsDir, "$timestamp.${encoder.outputExtension}")
 
+        // Classification, VAD, and voice attribution above all ran on the RAW cropped PCM so
+        // broadband transients (coughs) still trigger and classify correctly. Noise reduction is
+        // applied here, only to the bytes we persist for playback, and only when the user has the
+        // pref enabled. A fresh reducer is used per clip so no cross-event state leaks in.
+        val noiseReductionEnabled = runCatching {
+            ServiceLocator.preferences.noiseReductionEnabledFlow.first()
+        }.getOrDefault(true)
+        val pcmToSave = if (noiseReductionEnabled) {
+            // SpectralNoiseReducer has a fixed algorithmic latency (STFT seed + overlap-add delay),
+            // which it reports as latencySamples. For a one-shot pass over a finite clip, right-pad
+            // with that many zeros so the reducer flushes the clip's real tail, then drop the same
+            // number of leading latency samples and trim back to the original length. This keeps the
+            // saved clip full-length and time-aligned: no prepended silence and no clipped cough tail.
+            val reducer = SpectralNoiseReducer(sampleRate)
+            val latencySamples = reducer.latencySamples
+            val originalLength = cropped.pcm.size
+            val padded = cropped.pcm.copyOf(originalLength + latencySamples)
+            val denoised = reducer.process(padded)
+            denoised.copyOfRange(latencySamples, latencySamples + originalLength)
+        } else {
+            cropped.pcm
+        }
+
         val savedFile = withContext(AudioDispatchers.io) {
-            if (encoder.encode(cropped.pcm, sampleRate, primaryFile)) {
+            if (encoder.encode(pcmToSave, sampleRate, primaryFile)) {
                 primaryFile
             } else {
                 primaryFile.delete()
                 val fallbackFile = File(recordingsDir, "$timestamp.wav")
-                if (PcmToWavEncoder().encode(cropped.pcm, sampleRate, fallbackFile)) fallbackFile else null
+                if (PcmToWavEncoder().encode(pcmToSave, sampleRate, fallbackFile)) fallbackFile else null
             }
         } ?: return
 

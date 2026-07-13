@@ -52,6 +52,17 @@ class SpectralNoiseReducer(
     private val window = AudioMath.hannWindow(fftSize)
 
     /**
+     * Number of leading output samples that are pure algorithmic latency: the [fftSize] silence
+     * seed plus the extra half-window ([hop]) of overlap-add delay before real signal emerges.
+     *
+     * A one-shot caller that needs to denoise a *finite* clip (rather than a live stream) should
+     * right-pad the input with [latencySamples] zero samples so the reducer flushes the clip's real
+     * tail, then drop the first [latencySamples] output samples and keep the original length. That
+     * yields a full-length, time-aligned result with no prepended silence and no clipped tail.
+     */
+    val latencySamples: Int get() = fftSize + hop
+
+    /**
      * Per-output-sample normalization for analysis-window-only overlap-add. Dividing the summed
      * blocks by this yields unity-gain reconstruction when the spectral gain is 1, i.e. the filter
      * is bit-for-bit transparent when there is nothing to subtract.

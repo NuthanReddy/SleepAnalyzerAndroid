@@ -10,10 +10,14 @@ import tech.future.sleepanalyzer.audio.processing.SpectralNoiseReducer
  * Wraps another [AudioSource] and runs every captured frame through a [SpectralNoiseReducer],
  * stripping steady background noise (AC, fan, hum) before anything downstream sees the audio.
  *
- * Applying the clean-up at the source means the ring buffer, the voice-activity detector, the event
- * classifier, and the saved recordings all operate on the denoised signal, so detection accuracy
- * and playback both improve. The reducer keeps a fixed, small latency but preserves frame length,
- * timing, and sequence numbers, so the rest of the pipeline is unaffected.
+ * NOTE: This source is currently unused. Applying denoise at the source also fed the ring buffer,
+ * VAD, and classifier a denoised signal, which suppressed broadband transients like coughs and
+ * broke their detection. Detection now runs on the RAW mic signal and noise reduction is applied
+ * only to the cropped PCM that gets saved for playback (see AudioRecorderService.commitEvent). This
+ * class is retained for reference / potential reuse but is no longer part of the capture pipeline.
+ *
+ * The reducer keeps a fixed, small latency but preserves frame length, timing, and sequence
+ * numbers, so a stream wrapped this way stays aligned with the rest of the pipeline.
  */
 class DenoisingAudioSource(
     private val delegate: AudioSource,
