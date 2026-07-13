@@ -20,6 +20,7 @@ class AppPreferences(private val context: Context) {
         val VOICE_ISOLATION_ASKED = booleanPreferencesKey("voice_isolation_asked")
         val MIC_FOR_STAGING_ENABLED = booleanPreferencesKey("mic_for_staging_enabled")
         val RECORD_AUDIO_DURING_TRACKING = booleanPreferencesKey("record_audio_during_tracking")
+        val NOISE_REDUCTION_ENABLED = booleanPreferencesKey("noise_reduction_enabled")
         val BEDTIME_AUTO_DETECT_ENABLED = booleanPreferencesKey("bedtime_auto_detect_enabled")
         val DETAILED_HEALTH_CONTEXT_ENABLED = booleanPreferencesKey("detailed_health_context_enabled")
         val PROGRAMS_SEEDED = booleanPreferencesKey("programs_seeded")
@@ -36,6 +37,8 @@ class AppPreferences(private val context: Context) {
     val voiceIsolationAskedFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.VOICE_ISOLATION_ASKED] ?: false }
     val micForStagingEnabledFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.MIC_FOR_STAGING_ENABLED] ?: false }
     val recordAudioDuringTrackingFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.RECORD_AUDIO_DURING_TRACKING] ?: false }
+    /** Background-noise reduction (spectral subtraction) applied to the mic stream; on by default. */
+    val noiseReductionEnabledFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.NOISE_REDUCTION_ENABLED] ?: true }
     val bedtimeAutoDetectEnabledFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.BEDTIME_AUTO_DETECT_ENABLED] ?: false }
     val detailedHealthContextEnabledFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.DETAILED_HEALTH_CONTEXT_ENABLED] ?: false }
     val programsSeededFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.PROGRAMS_SEEDED] ?: false }
@@ -70,6 +73,10 @@ class AppPreferences(private val context: Context) {
 
     suspend fun setRecordAudioDuringTracking(value: Boolean) {
         context.dataStore.edit { it[Keys.RECORD_AUDIO_DURING_TRACKING] = value }
+    }
+
+    suspend fun setNoiseReductionEnabled(value: Boolean) {
+        context.dataStore.edit { it[Keys.NOISE_REDUCTION_ENABLED] = value }
     }
 
     suspend fun setBedtimeAutoDetectEnabled(value: Boolean) {

@@ -18,6 +18,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import tech.future.sleepanalyzer.audio.analysis.MicSleepSignalAggregator
@@ -39,6 +40,8 @@ import tech.future.sleepanalyzer.audio.processing.AudioFeatures
 import tech.future.sleepanalyzer.audio.processing.BandPassFilter
 import tech.future.sleepanalyzer.audio.processing.VoiceActivityDetector
 import tech.future.sleepanalyzer.audio.source.AudioRecordSource
+import tech.future.sleepanalyzer.audio.source.AudioSource
+import tech.future.sleepanalyzer.audio.source.DenoisingAudioSource
 import tech.future.sleepanalyzer.audio.util.ShortRingBuffer
 import tech.future.sleepanalyzer.data.db.entity.AudioRecording
 import tech.future.sleepanalyzer.data.prefs.AppPreferences
@@ -162,7 +165,15 @@ class AudioRecorderService : Service() {
             try {
                 sessionId = ServiceLocator.repository.getActiveSession()?.id
 
-                val source = AudioRecordSource(sampleRate = Constants.AUDIO_SAMPLE_RATE)
+                val baseSource = AudioRecordSource(sampleRate = Constants.AUDIO_SAMPLE_RATE)
+                // Strip steady background noise (AC/fan/hum) before the ring buffer, VAD, and
+                // classifier see anything, so snore/talk/cough detection works against a clean
+                // signal. On by default; users can turn it off in Settings.
+                val denoise = runCatching {
+                    ServiceLocator.preferences.noiseReductionEnabledFlow.first()
+                }.getOrDefault(true)
+                val source: AudioSource =
+                    if (denoise) DenoisingAudioSource(baseSource) else baseSource
                 val classifier = ServiceLocator.classifier()
                 val voiceMatcher = ServiceLocator.voiceMatcher()
                 val encoder = ServiceLocator.encoder()

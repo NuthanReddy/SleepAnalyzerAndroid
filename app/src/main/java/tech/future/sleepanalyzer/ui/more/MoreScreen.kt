@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.Summarize
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
@@ -67,6 +68,7 @@ fun MoreScreen(
     val weeklyReportEnabled by prefs.weeklyReportEnabledFlow.collectAsStateWithLifecycle(initialValue = true)
     val voiceIsolationEnabled by prefs.voiceIsolationEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
     val micForStagingEnabled by prefs.micForStagingEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
+    val noiseReductionEnabled by prefs.noiseReductionEnabledFlow.collectAsStateWithLifecycle(initialValue = true)
     val bedtimeAutoDetectEnabled by prefs.bedtimeAutoDetectEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
     val detailedHealthContextEnabled by prefs.detailedHealthContextEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
     val goal by ServiceLocator.repository.getActiveGoal().collectAsStateWithLifecycle(initialValue = null)
@@ -118,6 +120,13 @@ fun MoreScreen(
             "Use your enrolled voice profile to separate your sleep sounds",
             voiceIsolationEnabled,
             onCheckedChange = { scope.launch { prefs.setVoiceIsolationEnabled(it) } }
+        )
+        SwitchRow(
+            Icons.Default.Tune,
+            "Background noise reduction",
+            "Filter out steady noise like an AC, fan, or hum for cleaner snore, talk, and cough detection",
+            noiseReductionEnabled,
+            onCheckedChange = { scope.launch { prefs.setNoiseReductionEnabled(it) } }
         )
         SwitchRow(
             Icons.Default.Mic,
