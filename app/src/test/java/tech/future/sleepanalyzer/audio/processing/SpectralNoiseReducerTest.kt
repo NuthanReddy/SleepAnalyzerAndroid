@@ -106,6 +106,40 @@ class SpectralNoiseReducerTest {
     }
 
     @Test
+    fun `a broadband event (cough analogue) is preserved above the noise bed`() {
+        // A cough is broadband: its energy spreads across bins, so each bin sits only modestly above
+        // the learned noise. Flat over-subtraction would pull the whole burst down to the spectral
+        // floor and erase it; the event-aware backoff must keep most of it. This guards the exact
+        // regression a user hit ("my cough isn't recorded") that the loud-tone test above misses,
+        // because a single concentrated tone survives flat subtraction while a broadband burst does not.
+        val reducer = SpectralNoiseReducer(sampleRate)
+        val bed = Random(11)
+        val burst = Random(23)
+        val bedAmp = 1000
+        val burstAmp = 2000
+        val learnSamples = sampleRate       // 1s of bed noise only to learn the profile
+        val total = sampleRate * 2
+
+        val out = run(reducer, total) { i ->
+            val n = bed.nextInt(-bedAmp, bedAmp + 1)
+            if (i < learnSamples) {
+                n.toShort()
+            } else {
+                val b = burst.nextInt(-burstAmp, burstAmp + 1)
+                (n + b).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+            }
+        }
+
+        // Independent uniforms => variances add: RMS = sqrt((bedAmp^2 + burstAmp^2)/3) ~= 1291.
+        val inputEventRms = kotlin.math.sqrt((bedAmp * bedAmp + burstAmp * burstAmp) / 3f)
+        val outEventRms = rms(out, learnSamples + frameLen * 4, total)
+        assertTrue(
+            "a broadband cough-like burst must keep over half its energy, in=$inputEventRms out=$outEventRms",
+            outEventRms > inputEventRms * 0.5f
+        )
+    }
+
+    @Test
     fun `process returns exactly as many samples as it is given`() {
         val reducer = SpectralNoiseReducer(sampleRate)
         var totalIn = 0

@@ -18,10 +18,18 @@ import kotlin.math.sqrt
  * only visible effect is a fixed [fftSize]-sample latency, which is negligible (~46 ms at 22 kHz)
  * for second-scale sleep events.
  *
+ * Crucially, the subtraction is *event-aware*: when a block's energy is close to the learned noise
+ * floor (a steady stretch of AC/fan hum) the full over-subtraction is applied, but the moment a
+ * block jumps well above that floor - a cough, snore, or sleep-talk burst - the subtraction backs
+ * off so the transient is preserved for the VAD and classifier instead of being gutted. Flat
+ * spectral subtraction erases broadband events like coughs, whose per-bin energy sits only modestly
+ * above the noise; gating on block energy protects them while still cleaning the quiet background.
+ *
  * State is per-instance and thread-confined - create one per capture stream and never share it.
  *
- * @param overSubtraction how aggressively the noise estimate is removed (1.0 = exact estimate;
- *   >1 over-subtracts to better kill residual hum at the cost of possible distortion).
+ * @param overSubtraction how aggressively the noise estimate is removed on steady-noise blocks
+ *   (1.0 = exact estimate; >1 over-subtracts to better kill residual hum at the cost of possible
+ *   distortion). This is eased down automatically on blocks that look like an acoustic event.
  * @param spectralFloor fraction of the original magnitude retained in every bin, so we never fully
  *   null a bin. This suppresses "musical noise" artifacts and keeps the residual natural enough for
  *   a learned classifier (YAMNet) to still recognise events.
@@ -63,6 +71,11 @@ class SpectralNoiseReducer(
     private var noiseRms = 0f
     private var blocksSeen = 0
 
+    // How far the current block's energy sits above the learned noise floor (1 = at the floor).
+    // Refreshed every block in updateNoiseEstimate() and read by applyGains() to ease off the
+    // subtraction on acoustic events (coughs/snores) while fully cleaning steady background blocks.
+    private var blockEventRatio = 1f
+
     private var inbox = FloatArray(fftSize * 2)
     private var inboxHead = 0
     private var inboxSize = 0
@@ -96,6 +109,7 @@ class SpectralNoiseReducer(
         re.fill(0f); im.fill(0f); mag.fill(0f)
         history.fill(0f); acc.fill(0f); noiseMag.fill(0f)
         noiseRms = 0f; blocksSeen = 0
+        blockEventRatio = 1f
         inboxHead = 0; inboxSize = 0
         outboxHead = 0; outboxSize = 0
         seedLatency()
@@ -129,6 +143,10 @@ class SpectralNoiseReducer(
         val blockRms = sqrt(energy / (halfBins + 1)).toFloat()
 
         blocksSeen++
+        // How loud this block is relative to the tracked noise floor. Computed before the early
+        // return below so applyGains() sees a fresh value even on skipped (event) blocks.
+        blockEventRatio = if (noiseRms > 1e-6f) blockRms / noiseRms else 1f
+
         val warming = blocksSeen <= warmupBlocks
         // Only learn from blocks that look like background: the warm-up window (assumed quiet at the
         // start of a night) plus any later block whose energy is close to the tracked noise level.
@@ -142,10 +160,13 @@ class SpectralNoiseReducer(
     }
 
     private fun applyGains() {
+        // Scale the over-subtraction down for blocks that look like an acoustic event so broadband
+        // transients (coughs) keep most of their energy instead of being pulled to the floor.
+        val alpha = overSubtraction * eventSubtractionScale(blockEventRatio)
         for (k in 0..halfBins) {
             val m = mag[k]
             val gain = if (m > 1e-9f) {
-                val subtracted = m - overSubtraction * noiseMag[k]
+                val subtracted = m - alpha * noiseMag[k]
                 val floor = spectralFloor * m
                 val kept = if (subtracted > floor) subtracted else floor
                 (kept / m).coerceIn(0f, 1f)
@@ -155,6 +176,20 @@ class SpectralNoiseReducer(
                 val mirror = fftSize - k
                 re[mirror] *= gain; im[mirror] *= gain
             }
+        }
+    }
+
+    /**
+     * Maps a block's energy-above-noise ratio to an over-subtraction multiplier: full strength for
+     * steady background blocks (ratio at/below [EVENT_LOW]), sharply reduced for clear events
+     * (ratio at/above [EVENT_HIGH]), linearly interpolated in between.
+     */
+    private fun eventSubtractionScale(ratio: Float): Float = when {
+        ratio <= EVENT_LOW -> 1f
+        ratio >= EVENT_HIGH -> EVENT_SUBTRACTION_SCALE
+        else -> {
+            val t = (ratio - EVENT_LOW) / (EVENT_HIGH - EVENT_LOW)
+            1f + t * (EVENT_SUBTRACTION_SCALE - 1f)
         }
     }
 
@@ -195,12 +230,19 @@ class SpectralNoiseReducer(
 
     companion object {
         const val DEFAULT_FFT_SIZE = 1024
-        const val DEFAULT_OVER_SUBTRACTION = 1.6f
-        const val DEFAULT_SPECTRAL_FLOOR = 0.10f
+        const val DEFAULT_OVER_SUBTRACTION = 1.5f
+        const val DEFAULT_SPECTRAL_FLOOR = 0.12f
         const val DEFAULT_WARMUP_BLOCKS = 16
 
         private const val ACTIVATION_FACTOR = 1.8f
         private const val WARMUP_ADAPT = 0.25f
         private const val STEADY_ADAPT = 0.05f
+
+        // Event gating for over-subtraction: at/below EVENT_LOW a block is treated as steady
+        // background (full subtraction); at/above EVENT_HIGH it is a clear acoustic event and the
+        // subtraction is scaled to EVENT_SUBTRACTION_SCALE so the transient survives.
+        private const val EVENT_LOW = 1.4f
+        private const val EVENT_HIGH = 2.2f
+        private const val EVENT_SUBTRACTION_SCALE = 0.15f
     }
 }
