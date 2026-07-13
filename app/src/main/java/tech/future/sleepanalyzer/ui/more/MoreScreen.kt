@@ -290,6 +290,33 @@ fun MoreScreen(
         )
 
         Spacer(modifier = Modifier.height(24.dp))
+        SectionHeader("Permissions")
+        SettingsRow(
+            Icons.Default.Schedule,
+            "Exact alarms",
+            if (exactAlarmGranted) "Allowed" else "Off",
+            onClick = { PermissionsUtil.exactAlarmSettingsIntent(context)?.let(context::startActivity) }
+        )
+        SettingsRow(
+            Icons.Default.Notifications,
+            "Notifications",
+            if (notificationsGranted) "Allowed" else "Off",
+            onClick = {
+                if (!notificationsGranted) {
+                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data = Uri.parse("package:${context.packageName}")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(intent)
+                }
+            }
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+        SectionHeader("Games")
+        SettingsRow(Icons.Default.SportsEsports, "Alertness game", null, onNavigateToGame)
+
+        Spacer(modifier = Modifier.height(24.dp))
         SectionHeader("Backup & sync")
         SettingsRow(
             Icons.Default.Save,
@@ -338,36 +365,9 @@ fun MoreScreen(
         }
 
         Spacer(modifier = Modifier.height(24.dp))
-        SectionHeader("Permissions")
-        SettingsRow(
-            Icons.Default.Schedule,
-            "Exact alarms",
-            if (exactAlarmGranted) "Allowed" else "Off",
-            onClick = { PermissionsUtil.exactAlarmSettingsIntent(context)?.let(context::startActivity) }
-        )
-        SettingsRow(
-            Icons.Default.Notifications,
-            "Notifications",
-            if (notificationsGranted) "Allowed" else "Off",
-            onClick = {
-                if (!notificationsGranted) {
-                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                        data = Uri.parse("package:${context.packageName}")
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    context.startActivity(intent)
-                }
-            }
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-        SectionHeader("Personal")
+        SectionHeader("Privacy")
         SettingsRow(Icons.Default.Lock, "Consent and privacy", null, onNavigateToPrivacy)
         SettingsRow(Icons.Default.Info, "Third-party software", null, onNavigateToPrivacy)
-
-        Spacer(modifier = Modifier.height(24.dp))
-        SectionHeader("Games")
-        SettingsRow(Icons.Default.SportsEsports, "Alertness game", null, onNavigateToGame)
 
         Spacer(modifier = Modifier.height(24.dp))
         Text(
