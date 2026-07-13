@@ -41,6 +41,7 @@ fun DetailedStatsScreen(
     val avgDeepSleep by viewModel.averageDeepSleepMs.collectAsStateWithLifecycle()
     val avgInterruptions by viewModel.averageInterruptions.collectAsStateWithLifecycle()
     val stepsStats by viewModel.stepsStats.collectAsStateWithLifecycle()
+    val durationTrend by viewModel.durationTrend.collectAsStateWithLifecycle()
 
     Column(
         modifier = Modifier
@@ -147,7 +148,7 @@ fun DetailedStatsScreen(
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text("Duration Trend", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                         Spacer(modifier = Modifier.height(12.dp))
-                        DurationChart(sessions = sessions)
+                            DurationChart(buckets = durationTrend)
                     }
                 }
             }
@@ -214,16 +215,16 @@ fun ScoreTrendChart(sessions: List<SleepSession>) {
 }
 
 @Composable
-fun DurationChart(sessions: List<SleepSession>) {
+fun DurationChart(buckets: List<DurationBucket>) {
     Canvas(
         modifier = Modifier
             .fillMaxWidth()
             .height(120.dp)
     ) {
-        if (sessions.isEmpty()) return@Canvas
-        val durations = sessions.map { sessionElapsedMs(it) }
+        if (buckets.isEmpty()) return@Canvas
+        val durations = buckets.map { it.averageDurationMs }
         val maxDuration = (durations.maxOrNull() ?: 1L).coerceAtLeast(1L)
-        val barWidth = size.width / (sessions.size * 2)
+        val barWidth = size.width / (buckets.size * 2)
         val maxHeight = size.height
 
         durations.forEachIndexed { index, durationMs ->
