@@ -195,6 +195,7 @@ fun MoreScreen(
 
         Spacer(modifier = Modifier.height(28.dp))
         SectionHeader("General")
+        SettingsRow(Icons.Default.Person, "Profile", null, onNavigateToProfile)
         SettingsRow(
             Icons.Default.Flag,
             "Sleep goal",
@@ -361,7 +362,6 @@ fun MoreScreen(
 
         Spacer(modifier = Modifier.height(24.dp))
         SectionHeader("Personal")
-        SettingsRow(Icons.Default.Person, "About you", null, onNavigateToProfile)
         SettingsRow(Icons.Default.Lock, "Consent and privacy", null, onNavigateToPrivacy)
         SettingsRow(Icons.Default.Info, "Third-party software", null, onNavigateToPrivacy)
 
