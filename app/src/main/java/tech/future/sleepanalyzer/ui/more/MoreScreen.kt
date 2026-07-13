@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CloudDone
@@ -29,12 +28,12 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.SelfImprovement
 import androidx.compose.material.icons.filled.SettingsVoice
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.Summarize
@@ -85,8 +84,7 @@ import tech.future.sleepanalyzer.util.PermissionsUtil
 @Composable
 fun MoreScreen(
     onNavigateToGoals: () -> Unit = {},
-    onNavigateToSounds: () -> Unit = {},
-    onNavigateToAlarm: () -> Unit = {},
+    onNavigateToPrograms: () -> Unit = {},
     onNavigateToProfile: () -> Unit = {},
     onNavigateToPrivacy: () -> Unit = {},
     onNavigateToGame: () -> Unit = {},
@@ -206,9 +204,7 @@ fun MoreScreen(
             } ?: "Not set",
             onNavigateToGoals
         )
-        SettingsRow(Icons.Default.MusicNote, "Sleep-aid sounds", "Ambient", onNavigateToSounds)
-        SettingsRow(Icons.Default.Bedtime, "Smart alarms", null, onNavigateToAlarm)
-        SettingsRow(Icons.Default.Alarm, "Snooze", "Intelligent", onNavigateToAlarm)
+        SettingsRow(Icons.Default.SelfImprovement, "Sleep programs", null, onNavigateToPrograms)
         SwitchRow(
             Icons.Default.Summarize,
             "Weekly report",

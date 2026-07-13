@@ -232,8 +232,7 @@ fun SleepAnalyzerApp(
             composable(Screen.More.route) {
                 MoreScreen(
                     onNavigateToGoals = { navController.navigate(Screen.Goals.route) },
-                    onNavigateToSounds = { navController.navigate(Screen.Sounds.route) },
-                    onNavigateToAlarm = { navController.navigate(Screen.Alarm.route) },
+                    onNavigateToPrograms = { navController.navigate(Screen.Programs.route) },
                     onNavigateToProfile = { navController.navigate(Screen.Profile.route) },
                     onNavigateToPrivacy = { navController.navigate(Screen.Privacy.route) },
                     onNavigateToGame = { navController.navigate(Screen.Game.route) },
