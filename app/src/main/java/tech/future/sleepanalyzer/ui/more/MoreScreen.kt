@@ -366,7 +366,7 @@ fun MoreScreen(
         SettingsRow(Icons.Default.Info, "Third-party software", null, onNavigateToPrivacy)
 
         Spacer(modifier = Modifier.height(24.dp))
-        SectionHeader("Other")
+        SectionHeader("Games")
         SettingsRow(Icons.Default.SportsEsports, "Alertness game", null, onNavigateToGame)
 
         Spacer(modifier = Modifier.height(24.dp))
