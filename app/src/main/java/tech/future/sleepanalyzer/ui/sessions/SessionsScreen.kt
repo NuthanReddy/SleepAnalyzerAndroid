@@ -100,10 +100,9 @@ private fun SessionCard(
     recordingCount: Int,
     onClick: () -> Unit
 ) {
-    val dateFormat = remember { SimpleDateFormat("EEE, MMM d", Locale.getDefault()) }
-    val timeFormat = remember { SimpleDateFormat("h:mm a", Locale.getDefault()) }
-    val durationMs = ((session.endTime ?: (session.startTime + session.durationMinutes * 60_000L)) -
-        session.startTime).coerceAtLeast(0L)
+    val headingFormat = remember { SimpleDateFormat("EEE MMM d h:mm", Locale.getDefault()) }
+    val endTime = session.endTime ?: (session.startTime + session.durationMinutes * 60_000L)
+    val durationMs = (endTime - session.startTime).coerceAtLeast(0L)
     val scoreColor = when {
         session.qualityScore >= 80 -> SleepScore
         session.qualityScore >= 60 -> SleepSecondary
@@ -126,13 +125,13 @@ private fun SessionCard(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = dateFormat.format(Date(session.startTime)),
+                    text = "${headingFormat.format(Date(session.startTime))} - ${headingFormat.format(Date(endTime))}",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = "${timeFormat.format(Date(session.startTime))}  ·  ${formatSleepDuration(durationMs)}",
+                    text = formatSleepDuration(durationMs),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
