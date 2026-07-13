@@ -441,7 +441,56 @@ private data class StageBreakdown(
     val remMs: Long,
     val awakeMs: Long
 ) {
-    val totalMs: Long = (deepMs + lightMs + remMs + awakeMs).coerceAtLeast(1L)
+    val sumMs: Long get() = deepMs + lightMs + remMs + awakeMs
+
+    /** Denominator for stage-bar weights; never zero so the UI never divides by 0. */
+    val totalMs: Long get() = sumMs.coerceAtLeast(1L)
+
+    /**
+     * Rescale the split so Deep + Light + REM + Awake sum *exactly* to [targetMs] (the full
+     * session duration). Guarantees the four displayed durations always add up to the whole session:
+     * - under-counts (whole-minute flooring, doze gaps) grow every bucket proportionally, with the
+     *   integer rounding remainder parked in Light (the neutral majority stage);
+     * - over-counts scale down proportionally;
+     * - a fully empty split falls back to a typical adult architecture so a real session is never blank.
+     */
+    fun reconciledTo(targetMs: Long): StageBreakdown {
+        if (targetMs <= 0L) return this
+        val sum = sumMs
+        return when {
+            sum == targetMs -> this
+            sum <= 0L -> architecture(targetMs)
+            sum < targetMs -> {
+                val gap = targetMs - sum
+                val d = deepMs + gap * deepMs / sum
+                val r = remMs + gap * remMs / sum
+                val a = awakeMs + gap * awakeMs / sum
+                val l = (targetMs - d - r - a).coerceAtLeast(0L) // absorbs the rounding remainder
+                StageBreakdown(d, l, r, a)
+            }
+            else -> {
+                val d = deepMs * targetMs / sum
+                val r = remMs * targetMs / sum
+                val a = awakeMs * targetMs / sum
+                val l = (targetMs - d - r - a).coerceAtLeast(0L)
+                StageBreakdown(d, l, r, a)
+            }
+        }
+    }
+
+    companion object {
+        /**
+         * Typical adult sleep architecture (Walker, "Why We Sleep"): ~22% deep, ~22% REM, ~5% awake,
+         * remainder light. Used when there is no usable per-stage data. Sums exactly to [totalMs].
+         */
+        fun architecture(totalMs: Long): StageBreakdown {
+            val deep = totalMs * 22 / 100
+            val rem = totalMs * 22 / 100
+            val awake = totalMs * 5 / 100
+            val light = (totalMs - deep - rem - awake).coerceAtLeast(0L)
+            return StageBreakdown(deepMs = deep, lightMs = light, remMs = rem, awakeMs = awake)
+        }
+    }
 }
 
 private fun resolveStageBreakdown(
@@ -450,24 +499,23 @@ private fun resolveStageBreakdown(
     sessionEndMs: Long
 ): StageBreakdown {
     val elapsedMs = ((session.endTime ?: sessionEndMs) - session.startTime).coerceAtLeast(0L)
-    var heuristic = StageBreakdown(
+
+    val stored = StageBreakdown(
         deepMs = session.deepSleepMinutes * MILLIS_PER_MINUTE,
         lightMs = session.lightSleepMinutes * MILLIS_PER_MINUTE,
         remMs = session.remSleepMinutes * MILLIS_PER_MINUTE,
         awakeMs = session.awakeMinutes * MILLIS_PER_MINUTE
     )
-    // Whole-minute persistence floors sub-minute buckets to 0, so short sessions would otherwise
-    // render an empty split with every stage at "0h 0m". When the stored stages sum to well under
-    // the real elapsed time, rebuild an ms-precision breakdown from the duration using typical
-    // adult sleep architecture (~22% deep, ~22% REM, ~5% awake, remainder light) — mirroring the
-    // tracking service's own fallback.
-    val storedStageMs = heuristic.deepMs + heuristic.lightMs + heuristic.remMs + heuristic.awakeMs
-    if (elapsedMs > 0L && storedStageMs < elapsedMs / 2) {
-        val deep = elapsedMs * 22 / 100
-        val rem = elapsedMs * 22 / 100
-        val awake = elapsedMs * 5 / 100
-        val light = (elapsedMs - deep - rem - awake).coerceAtLeast(0L)
-        heuristic = StageBreakdown(deepMs = deep, lightMs = light, remMs = rem, awakeMs = awake)
+    // Per-stage minutes are persisted floored to whole minutes, so even a fully tracked session's
+    // stored buckets fall a few minutes short of the real elapsed time (and short sessions floor
+    // every bucket to 0). Reconcile the stored split back up to the full session duration so the
+    // four stages always sum to the whole session — Awake included. When the stored data is
+    // implausibly small (< 25% of elapsed, matching the tracking service's own fallback), rebuild
+    // from a typical adult architecture instead of magnifying noise.
+    val heuristic = if (elapsedMs > 0L && stored.sumMs < elapsedMs / 4) {
+        StageBreakdown.architecture(elapsedMs)
+    } else {
+        stored.reconciledTo(elapsedMs)
     }
     if (vendorStageSegments.isEmpty()) return heuristic
 
@@ -484,12 +532,16 @@ private fun resolveStageBreakdown(
     val sessionDurationMs = (sessionEndMs - session.startTime).coerceAtLeast(1L)
     if (coveredDurationMs * 2 <= sessionDurationMs) return heuristic
 
-    return StageBreakdown(
+    val vendor = StageBreakdown(
         deepMs = stageDurations.getOrDefault(SleepStage.DEEP, 0L),
         lightMs = stageDurations.getOrDefault(SleepStage.LIGHT, 0L),
         remMs = stageDurations.getOrDefault(SleepStage.REM, 0L),
         awakeMs = stageDurations.getOrDefault(SleepStage.AWAKE, 0L)
     )
+    // Time not covered by any vendor stage segment is out-of-stage (out of bed / awake); attribute
+    // that gap to Awake, then reconcile so the four stages sum exactly to the full session.
+    val uncoveredMs = (elapsedMs - vendor.sumMs).coerceAtLeast(0L)
+    return vendor.copy(awakeMs = vendor.awakeMs + uncoveredMs).reconciledTo(elapsedMs)
 }
 
 private fun formatDuration(durationMs: Long): String {
