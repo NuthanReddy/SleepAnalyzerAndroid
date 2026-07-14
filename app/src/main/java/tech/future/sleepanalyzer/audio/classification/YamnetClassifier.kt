@@ -52,6 +52,8 @@ class YamnetClassifier private constructor(
 
         val groupScores = HashMap<AudioEventType, Float>()
         var silenceScore = 0f
+        var topRawIndex = -1
+        var topRawScore = 0f
         val hop = (windowSamples / 2).coerceAtLeast(1)
         var start = 0
         var windows = 0
@@ -68,6 +70,7 @@ class YamnetClassifier private constructor(
                 }.firstOrNull()?.categories ?: emptyList()
 
                 for (c in categories) {
+                    if (c.score > topRawScore) { topRawScore = c.score; topRawIndex = c.index }
                     if (c.index == YamnetLabels.SILENCE_INDEX) silenceScore = max(silenceScore, c.score)
                     val group = YamnetLabels.groupFor(c.index) ?: continue
                     groupScores[group] = max(groupScores[group] ?: 0f, c.score)
@@ -82,7 +85,14 @@ class YamnetClassifier private constructor(
             return ClassificationResult(AudioEventType.UNKNOWN, 0.3f, features)
         }
 
+        val topRaw = "idx=$topRawIndex score=${"%.3f".format(topRawScore)}"
+
         val (type, confidence) = YamnetLabels.decide(groupScores, silenceScore, features.rms, features.peak)
+        Log.i(
+            "SleepAudioDiag",
+            "YAMNet scores: groups=${groupScores.entries.joinToString { "${it.key}=${"%.3f".format(it.value)}" }} " +
+                "silence=${"%.3f".format(silenceScore)} topRaw=$topRaw -> decided=$type conf=$confidence"
+        )
         return ClassificationResult(type, confidence, features)
     }
 
