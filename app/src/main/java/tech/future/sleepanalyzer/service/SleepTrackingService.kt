@@ -74,6 +74,17 @@ class SleepTrackingService : Service(), SensorEventListener {
 
         var isTracking = false
             private set
+
+        /**
+         * The session id this service is actively tracking, or null when idle. Lives on the
+         * companion (process-global) so [tech.future.sleepanalyzer.ui.tracker.SleepTrackerViewModel]
+         * can tell, on app open, whether a persisted `isTracking = 1` row is genuinely live or an
+         * orphan left behind by a process kill. It resets to null on a fresh process (and START_STICKY
+         * redelivery hands us a null intent, so tracking never silently self-resumes), which is
+         * exactly what lets orphan reconciliation detect stale sessions.
+         */
+        var activeSessionId: Long? = null
+            private set
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -98,6 +109,7 @@ class SleepTrackingService : Service(), SensorEventListener {
         startTime = System.currentTimeMillis()
         lastStageCheckTime = startTime
         isTracking = true
+        activeSessionId = sessionId.takeIf { it > 0 }
         motionEvents.clear()
         interruptionCount = 0
         lastMotionTime = 0L
@@ -216,6 +228,7 @@ class SleepTrackingService : Service(), SensorEventListener {
         }
 
         isTracking = false
+        activeSessionId = null
         sensorManager.unregisterListener(this)
         wakeLock?.takeIf { it.isHeld }?.release()
         wakeLock = null
@@ -406,6 +419,7 @@ class SleepTrackingService : Service(), SensorEventListener {
     override fun onDestroy() {
         super.onDestroy()
         isTracking = false
+        activeSessionId = null
         sensorManager.unregisterListener(this)
         wakeLock?.takeIf { it.isHeld }?.release()
         serviceScope.cancel()

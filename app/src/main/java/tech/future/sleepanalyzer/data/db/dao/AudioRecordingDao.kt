@@ -33,6 +33,12 @@ interface AudioRecordingDao {
     @Query("SELECT * FROM audio_recordings ORDER BY startTime DESC LIMIT :limit")
     fun getRecentRecordings(limit: Int = 20): Flow<List<AudioRecording>>
 
+    @Query("SELECT COUNT(*) FROM audio_recordings WHERE sessionId = :sessionId")
+    suspend fun countBySession(sessionId: Long): Int
+
+    @Query("SELECT MAX(endTime) FROM audio_recordings WHERE sessionId = :sessionId")
+    suspend fun getLastRecordingEnd(sessionId: Long): Long?
+
     @Query("SELECT * FROM audio_recordings WHERE type = 'talk' AND transcript IS NULL ORDER BY startTime DESC")
     suspend fun getPendingTranscriptions(): List<AudioRecording>
 

@@ -29,6 +29,53 @@ class SleepRepository(context: Context) {
     fun getSessionByDateFlow(date: String): Flow<SleepSession?> = sessionDao.getByDateFlow(date)
     fun getSessionsBetween(start: String, end: String): Flow<List<SleepSession>> = sessionDao.getSessionsBetween(start, end)
     suspend fun getActiveSession(): SleepSession? = sessionDao.getActiveSession()
+    suspend fun getActiveSessions(): List<SleepSession> = sessionDao.getActiveSessions()
+
+    /**
+     * Reconcile persisted `isTracking = 1` rows against the actually-running foreground service.
+     *
+     * A tracking row is only ever finalized (endTime/duration/stages/score written) when the user
+     * cleanly stops. If the process is killed mid-tracking — OS/battery kill, force-stop, crash,
+     * reinstall — the row is stranded `isTracking = 1, endTime = null` forever, and because
+     * START_STICKY redelivers a null intent the service never resumes it. On the next app open that
+     * stale row was being resurrected as a phantom "in-progress since <hours ago>" session.
+     *
+     * @param liveSessionId the session id the running service reports (null when no service is live).
+     *   The row matching it is preserved and returned so a genuine background session still resumes.
+     * @return the live session to resume, or null if there is none.
+     *
+     * Orphans (every active row that isn't the live one) are closed out:
+     *  - with no captured audio → deleted (interrupted before any real data; nothing to keep);
+     *  - with captured audio → finalized (isTracking = 0, endTime derived from the last clip) so the
+     *    recorded clips stay grouped under a normal completed session instead of a phantom.
+     */
+    suspend fun reconcileOrphanedSessions(liveSessionId: Long?): SleepSession? {
+        val actives = sessionDao.getActiveSessions()
+        if (actives.isEmpty()) return null
+        var live: SleepSession? = null
+        for (session in actives) {
+            if (liveSessionId != null && session.id == liveSessionId) {
+                live = session
+                continue
+            }
+            val recordingCount = recordingDao.countBySession(session.id)
+            if (recordingCount == 0) {
+                sessionDao.delete(session)
+            } else {
+                val lastEnd = recordingDao.getLastRecordingEnd(session.id) ?: session.startTime
+                val endTime = maxOf(lastEnd, session.startTime)
+                val durationMinutes = ((endTime - session.startTime) / 60_000L).toInt().coerceAtLeast(0)
+                sessionDao.update(
+                    session.copy(
+                        endTime = endTime,
+                        durationMinutes = durationMinutes,
+                        isTracking = false
+                    )
+                )
+            }
+        }
+        return live
+    }
     fun getMostRecentCompletedSession(): Flow<SleepSession?> = sessionDao.getMostRecentCompleted()
     fun getAverageScore(start: String, end: String): Flow<Float?> = sessionDao.getAverageScore(start, end)
     fun getAverageDuration(start: String, end: String): Flow<Float?> = sessionDao.getAverageDuration(start, end)

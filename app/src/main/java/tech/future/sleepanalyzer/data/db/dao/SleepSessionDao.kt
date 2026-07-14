@@ -39,6 +39,9 @@ interface SleepSessionDao {
     @Query("SELECT * FROM sleep_sessions WHERE isTracking = 1 LIMIT 1")
     suspend fun getActiveSession(): SleepSession?
 
+    @Query("SELECT * FROM sleep_sessions WHERE isTracking = 1 ORDER BY startTime DESC")
+    suspend fun getActiveSessions(): List<SleepSession>
+
     @Query("SELECT AVG(qualityScore) FROM sleep_sessions WHERE date BETWEEN :startDate AND :endDate AND qualityScore > 0")
     fun getAverageScore(startDate: String, endDate: String): Flow<Float?>
 

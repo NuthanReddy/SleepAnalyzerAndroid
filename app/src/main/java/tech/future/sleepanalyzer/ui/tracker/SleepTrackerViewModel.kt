@@ -97,11 +97,14 @@ class SleepTrackerViewModel(application: Application) : AndroidViewModel(applica
 
     init {
         viewModelScope.launch {
-            val active = repository.getActiveSession()
-            if (active != null) {
+            // Only resume a session the foreground service is genuinely still running; any other
+            // `isTracking = 1` row is an orphan from a process kill and gets closed out here so it
+            // stops reappearing as a phantom "started N hours ago" session on app open.
+            val live = repository.reconcileOrphanedSessions(SleepTrackingService.activeSessionId)
+            if (live != null) {
                 _isTracking.value = true
-                _currentSessionId.value = active.id
-                _trackingStartTime.value = active.startTime
+                _currentSessionId.value = live.id
+                _trackingStartTime.value = live.startTime
             }
         }
     }
