@@ -15,12 +15,11 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
     data object Track : Screen("track", "Sleep", Icons.Default.Nightlight)
     data object Sounds : Screen("sounds", "Sounds", Icons.Default.MusicNote)
     data object Alarm : Screen("alarm", "Alarm", Icons.Default.Alarm)
-    data object More : Screen("more", "Settings", Icons.Default.Settings)
+    data object Settings : Screen("more", "Settings", Icons.Default.Settings)
 
     // Onboarding
     data object Onboarding : Screen("onboarding", "Welcome")
     data object VoiceEnroll : Screen("voice_enroll", "Voice Setup")
-    data object Settings : Screen("settings", "Settings")
     data object Privacy : Screen("privacy", "Privacy")
     data object Profile : Screen("profile", "Profile")
     data object Signup : Screen("signup", "Sign up")
@@ -45,7 +44,6 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector?
 
     companion object {
         val bottomNavItems: List<Screen>
-            get() = listOf(Track, Alarm, Sessions, Stats, More)
+            get() = listOf(Track, Alarm, Sessions, Stats, Settings)
     }
 }
-

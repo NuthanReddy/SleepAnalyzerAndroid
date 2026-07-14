@@ -87,4 +87,33 @@ class YamnetClassifierTest {
         assertEquals(AudioEventType.UNKNOWN, type)
         assertEquals(0.3f, conf, 0.001f)
     }
+
+    @Test
+    fun `long clip windows span the complete recording`() {
+        val sampleCount = 20 * 16_000
+        val windowSize = 15_600
+        val starts = YamnetClassifier.selectWindowStarts(
+            sampleCount = sampleCount,
+            windowSize = windowSize,
+            hopSize = windowSize / 2,
+            maxWindows = 12
+        )
+
+        assertEquals(12, starts.size)
+        assertEquals(0, starts.first())
+        assertEquals(sampleCount - windowSize, starts.last())
+        assertTrue((1 until starts.size).all { index -> starts[index] > starts[index - 1] })
+    }
+
+    @Test
+    fun `short clip retains normal overlapping windows`() {
+        val starts = YamnetClassifier.selectWindowStarts(
+            sampleCount = 30_000,
+            windowSize = 15_600,
+            hopSize = 7_800,
+            maxWindows = 12
+        )
+
+        assertEquals(listOf(0, 7_800, 14_400), starts.toList())
+    }
 }

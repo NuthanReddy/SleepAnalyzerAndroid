@@ -30,6 +30,16 @@ import tech.future.sleepanalyzer.data.db.entity.VoiceProfile
 import tech.future.sleepanalyzer.data.db.entity.WearableDevice
 import tech.future.sleepanalyzer.data.db.entity.WearableSample
 import tech.future.sleepanalyzer.data.db.entity.WearableSleepStage
+import java.io.File
+
+const val DATABASE_SCHEMA_VERSION = 7
+
+data class BackupDatabaseSnapshot(
+    val databaseFile: File,
+    val databaseRecords: Int,
+    val recordingFiles: Map<Long, String>,
+    val voiceProfileFiles: Map<Long, String>
+)
 
 @Database(
     entities = [
@@ -46,7 +56,7 @@ import tech.future.sleepanalyzer.data.db.entity.WearableSleepStage
         WearableSleepStage::class,
         WearableDevice::class
     ],
-    version = 7,
+    version = DATABASE_SCHEMA_VERSION,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -202,10 +212,170 @@ abstract class AppDatabase : RoomDatabase() {
 
         const val DATABASE_NAME = "sleep_analyzer_database"
 
+        private val BACKUP_TABLES = listOf(
+            "sleep_sessions",
+            "sleep_notes",
+            "alarm_configs",
+            "audio_recordings",
+            "sleep_goals",
+            "sleep_programs",
+            "voice_profiles",
+            "user_profile",
+            "user_account",
+            "wearable_samples",
+            "wearable_sleep_stages",
+            "wearable_devices"
+        )
+
         /** Checkpoints the WAL so the primary .db file holds the full, up-to-date dataset. */
         fun checkpoint(context: Context) {
             val db = getDatabase(context)
             db.query("PRAGMA wal_checkpoint(TRUNCATE)", emptyArray()).use { it.moveToFirst() }
+        }
+
+        fun countBackupRows(context: Context): Int {
+            val sqlite = getDatabase(context).openHelper.readableDatabase
+            return countRows(sqlite, "main")
+        }
+
+        /**
+         * Materializes a consistent, same-transaction snapshot into a standalone SQLite file.
+         * Only user-owned tables are copied; Room's internal metadata is intentionally excluded.
+         */
+        fun createBackupSnapshot(context: Context, target: File): BackupDatabaseSnapshot {
+            target.parentFile?.mkdirs()
+            if (target.exists() && !target.delete()) {
+                throw IllegalStateException("Could not replace temporary backup database")
+            }
+            val room = getDatabase(context)
+            val sqlite = room.openHelper.writableDatabase
+            sqlite.execSQL("ATTACH DATABASE ? AS backup_target", arrayOf(target.absolutePath))
+            try {
+                room.runInTransaction {
+                    BACKUP_TABLES.forEach { table ->
+                        sqlite.execSQL(
+                            "CREATE TABLE backup_target.`$table` AS " +
+                                "SELECT * FROM main.`$table`"
+                        )
+                    }
+                }
+                return BackupDatabaseSnapshot(
+                    databaseFile = target,
+                    databaseRecords = countRows(sqlite, "backup_target"),
+                    recordingFiles = readMediaPaths(
+                        sqlite = sqlite,
+                        schema = "backup_target",
+                        table = "audio_recordings",
+                        pathColumn = "filePath",
+                        includeBlank = true
+                    ),
+                    voiceProfileFiles = readMediaPaths(
+                        sqlite = sqlite,
+                        schema = "backup_target",
+                        table = "voice_profiles",
+                        pathColumn = "sampleFilePath",
+                        includeBlank = false
+                    )
+                )
+            } finally {
+                sqlite.execSQL("DETACH DATABASE backup_target")
+            }
+        }
+
+        /**
+         * Replaces all user-owned Room rows from a same-schema backup database. Media paths are
+         * rewritten inside the transaction so restored rows never point at another installation.
+         */
+        fun restoreFromBackup(
+            context: Context,
+            backupDatabase: File,
+            recordingPaths: Map<Long, String>,
+            voiceProfilePaths: Map<Long, String>
+        ): Int {
+            require(backupDatabase.isFile) { "Backup database is missing" }
+            val room = getDatabase(context)
+            val sqlite = room.openHelper.writableDatabase
+            sqlite.execSQL(
+                "ATTACH DATABASE ? AS backup_source",
+                arrayOf(backupDatabase.absolutePath)
+            )
+            try {
+                val backupRecordingIds = readMediaPaths(
+                    sqlite = sqlite,
+                    schema = "backup_source",
+                    table = "audio_recordings",
+                    pathColumn = "filePath",
+                    includeBlank = true
+                ).keys
+                require(backupRecordingIds == recordingPaths.keys) {
+                    "Backup recording manifest does not match its database"
+                }
+                val backupVoiceProfileIds = readMediaPaths(
+                    sqlite = sqlite,
+                    schema = "backup_source",
+                    table = "voice_profiles",
+                    pathColumn = "sampleFilePath",
+                    includeBlank = false
+                ).keys
+                require(backupVoiceProfileIds == voiceProfilePaths.keys) {
+                    "Backup voice-profile manifest does not match its database"
+                }
+                room.runInTransaction {
+                    BACKUP_TABLES.asReversed().forEach { table ->
+                        sqlite.execSQL("DELETE FROM `$table`")
+                    }
+                    BACKUP_TABLES.forEach { table ->
+                        sqlite.execSQL(
+                            "INSERT INTO `$table` SELECT * FROM backup_source.`$table`"
+                        )
+                    }
+                    recordingPaths.forEach { (id, path) ->
+                        sqlite.execSQL(
+                            "UPDATE audio_recordings SET filePath = ? WHERE id = ?",
+                            arrayOf(path, id)
+                        )
+                    }
+                    voiceProfilePaths.forEach { (id, path) ->
+                        sqlite.execSQL(
+                            "UPDATE voice_profiles SET sampleFilePath = ? WHERE id = ?",
+                            arrayOf(path, id)
+                        )
+                    }
+                }
+            } finally {
+                sqlite.execSQL("DETACH DATABASE backup_source")
+            }
+            return countBackupRows(context)
+        }
+
+        private fun countRows(sqlite: SupportSQLiteDatabase, schema: String): Int =
+            BACKUP_TABLES.sumOf { table ->
+                sqlite.query("SELECT COUNT(*) FROM $schema.`$table`").use { cursor ->
+                    if (cursor.moveToFirst()) cursor.getInt(0) else 0
+                }
+            }
+
+        private fun readMediaPaths(
+            sqlite: SupportSQLiteDatabase,
+            schema: String,
+            table: String,
+            pathColumn: String,
+            includeBlank: Boolean
+        ): Map<Long, String> {
+            val where = if (includeBlank) {
+                ""
+            } else {
+                " WHERE `$pathColumn` IS NOT NULL AND TRIM(`$pathColumn`) != ''"
+            }
+            return buildMap {
+                sqlite.query(
+                    "SELECT id, `$pathColumn` FROM $schema.`$table`$where"
+                ).use { cursor ->
+                    while (cursor.moveToNext()) {
+                        put(cursor.getLong(0), cursor.getString(1).orEmpty())
+                    }
+                }
+            }
         }
 
         /** Closes the open database so its files can be safely overwritten during a restore. */

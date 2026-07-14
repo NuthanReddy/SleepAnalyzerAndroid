@@ -47,6 +47,9 @@ class AuthRepository(
 
     init {
         firebaseAuthOrNull()?.addAuthStateListener(authStateListener)
+        scope.launch {
+            reconcileAfterRestore()
+        }
     }
 
     fun isConfigured(): Boolean {
@@ -79,6 +82,20 @@ class AuthRepository(
         _state.value = AuthState.Guest
     }
 
+    suspend fun reconcileAfterRestore() {
+        val firebaseUser = firebaseAuthOrNull()?.currentUser
+        if (firebaseUser != null && isConfigured()) {
+            persistAndEmit(firebaseUser, providerFrom(firebaseUser))
+            return
+        }
+        val account = repository.getUserAccount()
+        _state.value = when {
+            account?.provider == LOCAL_PROVIDER -> account.toSignedIn()
+            isConfigured() -> AuthState.Guest
+            else -> AuthState.NotConfigured
+        }
+    }
+
     /**
      * Create a fully on-device account when Firebase is not configured.
      * The user is still "signed in" (provider = "local") so the rest of the app — profile,
@@ -98,7 +115,7 @@ class AuthRepository(
             email = email?.trim()?.takeIf { it.isNotEmpty() },
             displayName = displayName.trim().ifEmpty { null },
             photoUrl = null,
-            provider = "local",
+            provider = LOCAL_PROVIDER,
             createdAt = existing?.createdAt ?: System.currentTimeMillis(),
             lastSyncMs = 0L,
             syncEnabled = false
@@ -112,14 +129,16 @@ class AuthRepository(
         persistAndEmit(firebaseUser, provider)
     }
 
-    suspend fun deleteAccount() {
+    suspend fun deleteAccount(): Result<Unit> = runCatching {
         val auth = firebaseAuthOrNull()
-        runCatching {
-            auth?.currentUser?.delete()?.awaitCompletion()
-        }
+        auth?.currentUser?.delete()?.awaitCompletion()
         auth?.signOut()
         repository.clearUserAccount()
         _state.value = AuthState.Guest
+    }
+
+    companion object {
+        const val LOCAL_PROVIDER = "local"
     }
 
     private fun initialState(): AuthState {

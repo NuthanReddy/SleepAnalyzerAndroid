@@ -1,4 +1,4 @@
-package tech.future.sleepanalyzer.ui.more
+package tech.future.sleepanalyzer.ui.settings
 
 import android.content.Intent
 import android.net.Uri
@@ -6,21 +6,16 @@ import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bedtime
-import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Flag
@@ -39,11 +34,10 @@ import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.Summarize
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material3.Icon
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -51,9 +45,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -67,12 +59,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import tech.future.sleepanalyzer.auth.AuthState
+import tech.future.sleepanalyzer.auth.AuthRepository
 import tech.future.sleepanalyzer.data.prefs.AppPreferences
 import tech.future.sleepanalyzer.di.ServiceLocator
 import tech.future.sleepanalyzer.service.BedtimeDetectionService
 import tech.future.sleepanalyzer.sync.CloudSyncScheduler
 import tech.future.sleepanalyzer.sync.LocalBackupManager
-import tech.future.sleepanalyzer.ui.theme.SleepSecondary
 import tech.future.sleepanalyzer.ui.wearables.WearablesSection
 import tech.future.sleepanalyzer.util.PermissionsUtil
 
@@ -82,13 +74,15 @@ import tech.future.sleepanalyzer.util.PermissionsUtil
  * to duplicate toggles into.
  */
 @Composable
-fun MoreScreen(
+fun SettingsScreen(
     onNavigateToGoals: () -> Unit = {},
     onNavigateToPrograms: () -> Unit = {},
     onNavigateToProfile: () -> Unit = {},
     onNavigateToPrivacy: () -> Unit = {},
     onNavigateToGame: () -> Unit = {},
-    onReEnroll: () -> Unit = {}
+    onReEnroll: () -> Unit = {},
+    onNavigateToSignIn: () -> Unit = {},
+    onSignedOut: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -96,6 +90,7 @@ fun MoreScreen(
     val prefs = remember { ServiceLocator.preferences }
     val repository = remember { ServiceLocator.repository }
     val authRepository = remember { ServiceLocator.authRepository }
+    val dataRequestRepository = remember { ServiceLocator.dataRequestRepository }
 
     val weeklyReportEnabled by prefs.weeklyReportEnabledFlow.collectAsStateWithLifecycle(initialValue = true)
     val voiceIsolationEnabled by prefs.voiceIsolationEnabledFlow.collectAsStateWithLifecycle(initialValue = false)
@@ -112,6 +107,7 @@ fun MoreScreen(
     val userAccount by repository.observeUserAccount().collectAsStateWithLifecycle(initialValue = null)
     val authState by authRepository.state.collectAsStateWithLifecycle()
     val signedIn = authState as? AuthState.SignedIn
+    var showDeleteAccountDialog by remember { mutableStateOf(false) }
 
     val detailedHealthPermissions = remember { tech.future.sleepanalyzer.wearables.HealthConnectSource(context).detailedContextPermissions() }
     val detailedHealthPermissionLauncher = rememberLauncherForActivityResult(
@@ -131,9 +127,9 @@ fun MoreScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    val backupManager = remember { LocalBackupManager(repository) }
+    val backupManager = remember { LocalBackupManager(context, repository, prefs) }
     val createBackupLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/json")
+        contract = ActivityResultContracts.CreateDocument(LocalBackupManager.MIME_TYPE)
     ) { uri: Uri? ->
         if (uri != null) {
             scope.launch {
@@ -145,7 +141,9 @@ fun MoreScreen(
                     }
                 }
                 val text = result.fold(
-                    onSuccess = { count -> "Backup saved ($count records)." },
+                    onSuccess = { summary ->
+                        "Backup saved (${summary.databaseRecords} records, ${summary.mediaFiles} media files)."
+                    },
                     onFailure = { it.message ?: "Backup failed." }
                 )
                 Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
@@ -164,19 +162,89 @@ fun MoreScreen(
                         } ?: throw java.io.IOException("Couldn't open file for reading")
                     }
                 }
+                result.onSuccess { authRepository.reconcileAfterRestore() }
                 val text = result.fold(
-                    onSuccess = { count -> "Restored $count records." },
+                    onSuccess = { summary ->
+                        buildString {
+                            append("Restored ${summary.databaseRecords} records and ${summary.mediaFiles} media files.")
+                            if (summary.skippedLegacyRecordings > 0) {
+                                append(" ${summary.skippedLegacyRecordings} legacy recording entries lacked audio and were skipped.")
+                            }
+                        }
+                    },
                     onFailure = { it.message ?: "Restore failed." }
                 )
                 Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
             }
         }
     }
+    val launchPortableBackup = {
+        val stamp = java.text.SimpleDateFormat("yyyyMMdd_HHmm", java.util.Locale.US)
+            .format(java.util.Date())
+        createBackupLauncher.launch(
+            "sleep_analyzer_backup_$stamp.${LocalBackupManager.FILE_EXTENSION}"
+        )
+    }
 
     val versionName = remember(context) {
         runCatching {
             context.packageManager.getPackageInfo(context.packageName, 0).versionName
         }.getOrNull() ?: ""
+    }
+
+    if (showDeleteAccountDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteAccountDialog = false },
+            title = { Text("Delete account?") },
+            text = {
+                Text(
+                    if (signedIn?.provider == AuthRepository.LOCAL_PROVIDER) {
+                        "This removes the local account identity. Your sleep data stays on this device unless you remove it separately."
+                    } else {
+                        "This submits deletion of synced account data, signs you out, and removes the account identity from this device."
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteAccountDialog = false
+                        scope.launch {
+                            val result = runCatching {
+                                if (
+                                    signedIn?.provider != AuthRepository.LOCAL_PROVIDER &&
+                                    authRepository.isConfigured()
+                                ) {
+                                    val account = requireNotNull(userAccount) {
+                                        "Account details are unavailable"
+                                    }
+                                    dataRequestRepository.submitDeleteRequest(account).getOrThrow()
+                                }
+                                authRepository.deleteAccount().getOrThrow()
+                                prefs.setCloudSyncEnabled(false)
+                            }
+                            result.onSuccess {
+                                onSignedOut()
+                                Toast.makeText(context, "Account deleted", Toast.LENGTH_SHORT).show()
+                            }.onFailure {
+                                Toast.makeText(
+                                    context,
+                                    it.message ?: "Account deletion failed",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    }
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteAccountDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     Column(
@@ -211,6 +279,40 @@ fun MoreScreen(
             "Get a summary of your sleep every week",
             weeklyReportEnabled,
             onCheckedChange = { scope.launch { prefs.setWeeklyReportEnabled(it) } }
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+        SectionHeader("Account")
+        AccountSettingsSection(
+            signedIn = signedIn,
+            onSignIn = onNavigateToSignIn,
+            onExport = {
+                if (signedIn?.provider == AuthRepository.LOCAL_PROVIDER) {
+                    launchPortableBackup()
+                } else {
+                    scope.launch {
+                        val result = runCatching {
+                            dataRequestRepository.submitExportRequest(
+                                requireNotNull(userAccount) { "Account details are unavailable" }
+                            ).getOrThrow()
+                        }
+                        val message = result.fold(
+                            onSuccess = { "Account export requested" },
+                            onFailure = { it.message ?: "Export request failed" }
+                        )
+                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                    }
+                }
+            },
+            onSignOut = {
+                scope.launch {
+                    authRepository.signOut()
+                    prefs.setCloudSyncEnabled(false)
+                    onSignedOut()
+                    Toast.makeText(context, "Signed out", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onDelete = { showDeleteAccountDialog = true }
         )
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -317,17 +419,23 @@ fun MoreScreen(
         SettingsRow(
             Icons.Default.Save,
             "Back up to file",
-            null,
-            onClick = {
-                val stamp = java.text.SimpleDateFormat("yyyyMMdd_HHmm", java.util.Locale.US).format(java.util.Date())
-                createBackupLauncher.launch("sleep_analyzer_backup_$stamp.json")
-            }
+            "Includes settings, sleep data, recordings, and voice samples",
+            onClick = launchPortableBackup
         )
         SettingsRow(
             Icons.Default.Restore,
             "Restore from file",
             null,
-            onClick = { restoreBackupLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) }
+            onClick = {
+                restoreBackupLauncher.launch(
+                    arrayOf(
+                        LocalBackupManager.MIME_TYPE,
+                        "application/json",
+                        "text/plain",
+                        "*/*"
+                    )
+                )
+            }
         )
         SwitchRow(
             Icons.Default.CloudDone,
@@ -377,139 +485,5 @@ fun MoreScreen(
         )
 
         Spacer(modifier = Modifier.height(24.dp))
-    }
-}
-
-@Composable
-private fun SectionHeader(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.titleSmall,
-        fontWeight = FontWeight.Bold,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
-    )
-}
-
-@Composable
-private fun SwitchRow(
-    icon: ImageVector,
-    title: String,
-    subtitle: String?,
-    checked: Boolean,
-    enabled: Boolean = true,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(enabled = enabled) { onCheckedChange(!checked) }
-            .padding(vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = title,
-            tint = SleepSecondary,
-            modifier = Modifier.size(24.dp)
-        )
-        Spacer(modifier = Modifier.width(16.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(text = title, style = MaterialTheme.typography.bodyLarge)
-            if (subtitle != null) {
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-        Spacer(modifier = Modifier.width(12.dp))
-        Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
-    }
-}
-
-@Composable
-private fun SliderRow(
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    value: Float,
-    valueRange: ClosedFloatingPointRange<Float>,
-    onValueChange: (Float) -> Unit
-) {
-    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                imageVector = icon,
-                contentDescription = title,
-                tint = SleepSecondary,
-                modifier = Modifier.size(24.dp)
-            )
-            Spacer(modifier = Modifier.width(16.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(text = title, style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-        Slider(value = value, onValueChange = onValueChange, valueRange = valueRange)
-    }
-}
-
-@Composable
-fun SettingsRow(
-    icon: ImageVector,
-    title: String,
-    value: String?,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = title,
-            tint = SleepSecondary,
-            modifier = Modifier.size(24.dp)
-        )
-        Spacer(modifier = Modifier.width(16.dp))
-        Text(
-            text = title,
-            style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.weight(1f)
-        )
-        if (value != null) {
-            Text(
-                text = value,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-        }
-        Icon(
-            Icons.Default.ChevronRight,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
-
-private fun Long?.relativeSyncLabel(): String {
-    val value = this ?: return "never"
-    if (value <= 0L) return "never"
-    val minutes = ((System.currentTimeMillis() - value) / 60_000L).coerceAtLeast(0L)
-    return when {
-        minutes == 0L -> "just now"
-        minutes < 60L -> "$minutes min ago"
-        minutes < 1_440L -> "${minutes / 60L} hr ago"
-        else -> "${minutes / 1_440L} day ago"
     }
 }

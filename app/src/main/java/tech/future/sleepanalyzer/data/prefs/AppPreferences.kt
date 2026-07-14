@@ -8,9 +8,28 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 private val Context.dataStore by preferencesDataStore(name = "sleep_analyzer_prefs")
+
+data class AppPreferencesSnapshot(
+    val setupCompleted: Boolean,
+    val voiceIsolationEnabled: Boolean,
+    val voiceIsolationAsked: Boolean,
+    val micForStagingEnabled: Boolean,
+    val recordAudioDuringTracking: Boolean,
+    val noiseReductionEnabled: Boolean,
+    val bedtimeAutoDetectEnabled: Boolean,
+    val detailedHealthContextEnabled: Boolean,
+    val programsSeeded: Boolean,
+    val cloudSyncEnabled: Boolean,
+    val lastDataRequestId: String?,
+    val lastPromptTime: Long,
+    val soundDefaultVolume: Float,
+    val eventMergeGapMs: Long,
+    val weeklyReportEnabled: Boolean
+)
 
 class AppPreferences(private val context: Context) {
 
@@ -121,6 +140,51 @@ class AppPreferences(private val context: Context) {
 
     suspend fun setWeeklyReportEnabled(value: Boolean) {
         context.dataStore.edit { it[Keys.WEEKLY_REPORT_ENABLED] = value }
+    }
+
+    suspend fun createBackupSnapshot(): AppPreferencesSnapshot {
+        val values = context.dataStore.data.first()
+        return AppPreferencesSnapshot(
+            setupCompleted = values[Keys.SETUP_COMPLETED] ?: false,
+            voiceIsolationEnabled = values[Keys.VOICE_ISOLATION_ENABLED] ?: false,
+            voiceIsolationAsked = values[Keys.VOICE_ISOLATION_ASKED] ?: false,
+            micForStagingEnabled = values[Keys.MIC_FOR_STAGING_ENABLED] ?: false,
+            recordAudioDuringTracking = values[Keys.RECORD_AUDIO_DURING_TRACKING] ?: false,
+            noiseReductionEnabled = values[Keys.NOISE_REDUCTION_ENABLED] ?: true,
+            bedtimeAutoDetectEnabled = values[Keys.BEDTIME_AUTO_DETECT_ENABLED] ?: false,
+            detailedHealthContextEnabled = values[Keys.DETAILED_HEALTH_CONTEXT_ENABLED] ?: false,
+            programsSeeded = values[Keys.PROGRAMS_SEEDED] ?: false,
+            cloudSyncEnabled = values[Keys.CLOUD_SYNC_ENABLED] ?: false,
+            lastDataRequestId = values[Keys.LAST_DATA_REQUEST_ID],
+            lastPromptTime = values[Keys.LAST_PROMPT_TIME] ?: 0L,
+            soundDefaultVolume = values[Keys.SOUND_DEFAULT_VOLUME] ?: 0.7f,
+            eventMergeGapMs = (values[Keys.EVENT_MERGE_GAP_MS] ?: DEFAULT_EVENT_MERGE_GAP_MS)
+                .coerceIn(MIN_EVENT_MERGE_GAP_MS, MAX_EVENT_MERGE_GAP_MS),
+            weeklyReportEnabled = values[Keys.WEEKLY_REPORT_ENABLED] ?: true
+        )
+    }
+
+    suspend fun restoreBackupSnapshot(snapshot: AppPreferencesSnapshot) {
+        context.dataStore.edit { values ->
+            values[Keys.SETUP_COMPLETED] = snapshot.setupCompleted
+            values[Keys.VOICE_ISOLATION_ENABLED] = snapshot.voiceIsolationEnabled
+            values[Keys.VOICE_ISOLATION_ASKED] = snapshot.voiceIsolationAsked
+            values[Keys.MIC_FOR_STAGING_ENABLED] = snapshot.micForStagingEnabled
+            values[Keys.RECORD_AUDIO_DURING_TRACKING] = snapshot.recordAudioDuringTracking
+            values[Keys.NOISE_REDUCTION_ENABLED] = snapshot.noiseReductionEnabled
+            values[Keys.BEDTIME_AUTO_DETECT_ENABLED] = snapshot.bedtimeAutoDetectEnabled
+            values[Keys.DETAILED_HEALTH_CONTEXT_ENABLED] = snapshot.detailedHealthContextEnabled
+            values[Keys.PROGRAMS_SEEDED] = snapshot.programsSeeded
+            values[Keys.CLOUD_SYNC_ENABLED] = snapshot.cloudSyncEnabled
+            snapshot.lastDataRequestId?.let {
+                values[Keys.LAST_DATA_REQUEST_ID] = it
+            } ?: values.remove(Keys.LAST_DATA_REQUEST_ID)
+            values[Keys.LAST_PROMPT_TIME] = snapshot.lastPromptTime
+            values[Keys.SOUND_DEFAULT_VOLUME] = snapshot.soundDefaultVolume.coerceIn(0f, 1f)
+            values[Keys.EVENT_MERGE_GAP_MS] = snapshot.eventMergeGapMs
+                .coerceIn(MIN_EVENT_MERGE_GAP_MS, MAX_EVENT_MERGE_GAP_MS)
+            values[Keys.WEEKLY_REPORT_ENABLED] = snapshot.weeklyReportEnabled
+        }
     }
 
     companion object {

@@ -54,11 +54,14 @@ class YamnetClassifier private constructor(
         var silenceScore = 0f
         var topRawIndex = -1
         var topRawScore = 0f
-        val hop = (windowSamples / 2).coerceAtLeast(1)
-        var start = 0
-        var windows = 0
+        val windowStarts = selectWindowStarts(
+            sampleCount = samples.size,
+            windowSize = windowSamples,
+            hopSize = (windowSamples / 2).coerceAtLeast(1),
+            maxWindows = MAX_WINDOWS
+        )
         try {
-            while (start < samples.size && windows < MAX_WINDOWS) {
+            for (start in windowStarts) {
                 val end = minOf(start + windowSamples, samples.size)
                 val window = ShortArray(windowSamples)
                 System.arraycopy(samples, start, window, 0, end - start)
@@ -75,10 +78,6 @@ class YamnetClassifier private constructor(
                     val group = YamnetLabels.groupFor(c.index) ?: continue
                     groupScores[group] = max(groupScores[group] ?: 0f, c.score)
                 }
-
-                if (end == samples.size) break
-                start += hop
-                windows++
             }
         } catch (t: Throwable) {
             Log.w(TAG, "YAMNet inference failed; treating event as unknown", t)
@@ -119,6 +118,38 @@ class YamnetClassifier private constructor(
         private const val TAG = "YamnetClassifier"
         private const val MODEL_ASSET = "yamnet.tflite"
         private const val MAX_WINDOWS = 12
+
+        /**
+         * Uses every half-overlapping window for short clips. For longer clips, spreads the capped
+         * inference budget across the entire duration and always includes both ends.
+         */
+        internal fun selectWindowStarts(
+            sampleCount: Int,
+            windowSize: Int,
+            hopSize: Int,
+            maxWindows: Int
+        ): IntArray {
+            require(windowSize > 0)
+            require(hopSize > 0)
+            require(maxWindows > 0)
+            if (sampleCount <= windowSize) return intArrayOf(0)
+
+            val maxStart = sampleCount - windowSize
+            val allStarts = buildList {
+                var start = 0
+                while (start < maxStart) {
+                    add(start)
+                    start += hopSize
+                }
+                if (lastOrNull() != maxStart) add(maxStart)
+            }
+            if (allStarts.size <= maxWindows) return allStarts.toIntArray()
+            if (maxWindows == 1) return intArrayOf(maxStart / 2)
+
+            return IntArray(maxWindows) { index ->
+                (maxStart.toLong() * index / (maxWindows - 1)).toInt()
+            }
+        }
 
         /** Loads the model from assets. Returns null if it can't be loaded so callers can fall back. */
         fun create(context: Context): YamnetClassifier? = runCatching {

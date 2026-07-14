@@ -39,7 +39,6 @@ import tech.future.sleepanalyzer.ui.alarm.AlarmScreen
 import tech.future.sleepanalyzer.ui.auth.SignupScreen
 import tech.future.sleepanalyzer.ui.games.AlertnessGameScreen
 import tech.future.sleepanalyzer.ui.goals.SleepGoalScreen
-import tech.future.sleepanalyzer.ui.more.MoreScreen
 import tech.future.sleepanalyzer.ui.navigation.Screen
 import tech.future.sleepanalyzer.ui.onboarding.OnboardingScreen
 import tech.future.sleepanalyzer.ui.onboarding.VoiceEnrollScreen
@@ -48,6 +47,7 @@ import tech.future.sleepanalyzer.ui.programs.SleepProgramsScreen
 import tech.future.sleepanalyzer.ui.recorder.RecorderScreen
 import tech.future.sleepanalyzer.ui.sessions.SessionsScreen
 import tech.future.sleepanalyzer.ui.settings.PrivacyScreen
+import tech.future.sleepanalyzer.ui.settings.SettingsScreen
 import tech.future.sleepanalyzer.ui.sounds.SoundPlayerScreen
 import tech.future.sleepanalyzer.ui.sounds.SoundsLibraryScreen
 import tech.future.sleepanalyzer.ui.stats.DetailedStatsScreen
@@ -229,14 +229,16 @@ fun SleepAnalyzerApp(
                 AlarmScreen()
             }
 
-            composable(Screen.More.route) {
-                MoreScreen(
+            composable(Screen.Settings.route) {
+                SettingsScreen(
                     onNavigateToGoals = { navController.navigate(Screen.Goals.route) },
                     onNavigateToPrograms = { navController.navigate(Screen.Programs.route) },
                     onNavigateToProfile = { navController.navigate(Screen.Profile.route) },
                     onNavigateToPrivacy = { navController.navigate(Screen.Privacy.route) },
                     onNavigateToGame = { navController.navigate(Screen.Game.route) },
-                    onReEnroll = { navController.navigate(Screen.VoiceEnroll.route) }
+                    onReEnroll = { navController.navigate(Screen.VoiceEnroll.route) },
+                    onNavigateToSignIn = { navController.navigate(Screen.Signup.route) },
+                    onSignedOut = onSignedOut
                 )
             }
 

@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.util.Log
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -50,9 +51,16 @@ class AudioRecordSource(
         record = ar
         running.set(true)
         ar.startRecording()
+        Log.i(
+            "SleepAudioDiag",
+            "AudioRecordSource started: sampleRate=$sampleRate frameSize=$frameSizeSamples minBuffer=$minBuffer " +
+                "audioSource=$audioSource recordingState=${ar.recordingState}"
+        )
 
         val seq = AtomicLong(0)
         val buffer = ShortArray(frameSizeSamples)
+        var diagReads = 0L
+        var diagZeroReads = 0L
         try {
             // currentCoroutineContext().isActive cooperates with structured cancellation so
             // takeWhile / collect can abort cleanly. The previous callbackFlow + trySend
@@ -62,7 +70,15 @@ class AudioRecordSource(
                 running.get() &&
                 ar.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
                 val read = ar.read(buffer, 0, buffer.size)
-                if (read <= 0) continue
+                if (read <= 0) {
+                    diagZeroReads++
+                    if (diagZeroReads % 30 == 1L) {
+                        Log.w("SleepAudioDiag", "AudioRecord.read returned $read (zeroReads=$diagZeroReads) - mic producing no data")
+                    }
+                    continue
+                }
+                diagReads++
+                if (diagReads == 1L) Log.i("SleepAudioDiag", "AudioRecordSource: first frame read ($read samples)")
                 emit(
                     AudioFrame(
                         samples = buffer.copyOf(read),
@@ -74,6 +90,11 @@ class AudioRecordSource(
                 )
             }
         } finally {
+            Log.i(
+                "SleepAudioDiag",
+                "AudioRecordSource loop ended: totalReads=$diagReads zeroReads=$diagZeroReads " +
+                    "active=${currentCoroutineContext().isActive} running=${running.get()}"
+            )
             try { ar.stop() } catch (_: Throwable) {}
             try { ar.release() } catch (_: Throwable) {}
             record = null

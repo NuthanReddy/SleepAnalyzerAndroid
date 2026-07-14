@@ -13,14 +13,19 @@ import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import tech.future.sleepanalyzer.audio.analysis.MicSleepSignalAggregator
 import tech.future.sleepanalyzer.MainActivity
@@ -66,11 +71,25 @@ class AudioRecorderService : Service() {
     private var collectionJob: Job? = null
     private var rolloverJob: Job? = null
     private var sessionId: Long? = null
+    @Volatile private var eventProcessingContext: EventProcessingContext? = null
+    @Volatile private var isStopping = false
+    @Volatile private var pendingStartSignalOnly: Boolean? = null
 
     private val stateLock = Any()
     private var voiceStartMs: Long? = null
     private var lastVoiceEndMs: Long? = null
     private var silenceStartMs: Long? = null
+    private val eventProcessingMutex = Mutex()
+    private val commitJobsLock = Any()
+    private val commitJobs = mutableSetOf<Job>()
+    // Temporary frame-level diagnostic counter (see observeFrame). Lets us see whether frames flow
+    // and what RMS / noise-floor / voice state the VAD actually produces during a session.
+    @Volatile private var diagFrameCount = 0L
+    // Running maxima since the last periodic dump, so a short cough transient (~7-17 frames) is never
+    // missed by the ~1s sampling window.
+    @Volatile private var diagWindowMaxPeak = 0
+    @Volatile private var diagWindowMaxRms = 0f
+    @Volatile private var diagWindowVoiceFrames = 0
 
     /**
      * Silence gap that commits an in-progress event, sourced from user preferences so nearby
@@ -95,7 +114,6 @@ class AudioRecorderService : Service() {
         const val ACTION_START_SIGNAL_ONLY = "start_recording_signal_only"
         const val ACTION_STOP = "stop_recording"
 
-        private const val UNKNOWN_CONFIDENCE_THRESHOLD = 0.5f
         private const val MIC_ROLLOVER_INTERVAL_MS = 60_000L
 
         // Temporary diagnostic tag for triaging why sleep-session sound events (coughs/talks) are
@@ -111,10 +129,22 @@ class AudioRecorderService : Service() {
         fun latestMicSignal(): tech.future.sleepanalyzer.sleep.MicSleepSignal? = aggregatorRef?.latest()
     }
 
-    private data class PendingEvent(
+    private data class DetectedEvent(
         val voiceStartMs: Long,
         val voiceEndMs: Long,
         val triggerTimeMs: Long
+    )
+
+    private data class CapturedEvent(
+        val event: DetectedEvent,
+        val pcmSnapshot: ShortArray
+    )
+
+    private data class EventProcessingContext(
+        val classifier: AudioClassifier,
+        val voiceMatcher: VoiceMatcher,
+        val encoder: PcmEncoder,
+        val sampleRate: Int
     )
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -134,6 +164,10 @@ class AudioRecorderService : Service() {
     }
 
     private fun startRecording(signalOnly: Boolean) {
+        if (isStopping) {
+            pendingStartSignalOnly = signalOnly
+            return
+        }
         if (isActive) return
         if (!PermissionsUtil.isRecordAudioGranted(this)) {
             stopSelf()
@@ -141,6 +175,7 @@ class AudioRecorderService : Service() {
         }
 
         this.signalOnly = signalOnly
+        isStopping = false
         Log.i(DIAG, "startRecording: signalOnly=$signalOnly (full-capture=${!signalOnly})")
         createNotificationChannel()
         startForegroundRecorder(signalOnly)
@@ -180,6 +215,13 @@ class AudioRecorderService : Service() {
                 val classifier = ServiceLocator.classifier()
                 val voiceMatcher = ServiceLocator.voiceMatcher()
                 val encoder = ServiceLocator.encoder()
+                val processingContext = EventProcessingContext(
+                    classifier = classifier,
+                    voiceMatcher = voiceMatcher,
+                    encoder = encoder,
+                    sampleRate = source.sampleRate
+                )
+                eventProcessingContext = processingContext
                 val vad = VoiceActivityDetector()
                 val builder = AudioPipeline.Builder(source)
                     .withRingBuffer(seconds = Constants.AUDIO_BUFFER_SECONDS)
@@ -188,10 +230,7 @@ class AudioRecorderService : Service() {
                         observeFrame(
                             frame = frame,
                             vad = vad,
-                            classifier = classifier,
-                            voiceMatcher = voiceMatcher,
-                            encoder = encoder,
-                            sampleRate = source.sampleRate
+                            processingContext = processingContext
                         )
                     }
 
@@ -204,8 +243,8 @@ class AudioRecorderService : Service() {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (t: Throwable) {
-                Log.e(DIAG, "recorder pipeline failed; shutting down (no events will be recorded)", t)
-                shutdownRecorder()
+                Log.e(DIAG, "recorder pipeline failed; flushing pending audio before shutdown", t)
+                stopRecording()
             }
         }
     }
@@ -213,21 +252,52 @@ class AudioRecorderService : Service() {
     private fun observeFrame(
         frame: AudioFrame,
         vad: VoiceActivityDetector,
-        classifier: AudioClassifier,
-        voiceMatcher: VoiceMatcher,
-        encoder: PcmEncoder,
-        sampleRate: Int
+        processingContext: EventProcessingContext
     ) {
         val frameDurationMs = (frame.length.toLong() * 1000L / frame.sampleRateHz).coerceAtLeast(1L)
         val frameEndMs = frame.startTimeMs + frameDurationMs
         val isVoiceFrame = vad.process(frame) != null
 
-        var pendingEvent: PendingEvent? = null
+        // Temporary extensive instrumentation: track per-frame maxima and dump a rich sample ~once/sec
+        // so we can see whether audio flows, the real signal levels (peak/rms), the VAD threshold it is
+        // compared against, ZCR, and how many frames in the window counted as voice. This distinguishes
+        // "levels too low" from "VAD latched on" from "mic returning silence". Remove once confirmed.
+        var framePeak = 0
+        for (i in 0 until frame.length) {
+            val a = kotlin.math.abs(frame.samples[i].toInt())
+            if (a > framePeak) framePeak = a
+        }
+        diagFrameCount++
+        if (framePeak > diagWindowMaxPeak) diagWindowMaxPeak = framePeak
+        if (vad.lastRms > diagWindowMaxRms) diagWindowMaxRms = vad.lastRms
+        if (isVoiceFrame) diagWindowVoiceFrames++
+        if (diagFrameCount % 33 == 0L) {
+            Log.i(
+                DIAG,
+                "frames#$diagFrameCount win: maxPeak=$diagWindowMaxPeak maxRms=${"%.1f".format(diagWindowMaxRms)} " +
+                    "voiceFrames=$diagWindowVoiceFrames/33 | now rms=${"%.1f".format(vad.lastRms)} peak=$framePeak " +
+                    "zcr=${"%.3f".format(vad.lastZcr)} thr=${"%.1f".format(vad.lastThreshold)} " +
+                    "floor=${"%.1f".format(vad.noiseFloor)} isVoice=$isVoiceFrame"
+            )
+            diagWindowMaxPeak = 0
+            diagWindowMaxRms = 0f
+            diagWindowVoiceFrames = 0
+        }
+
+        var detectedEvent: DetectedEvent? = null
         var diagCommitDurMs = -1L
 
         synchronized(stateLock) {
             if (isVoiceFrame) {
-                if (voiceStartMs == null) voiceStartMs = frame.startTimeMs
+                if (voiceStartMs == null) {
+                    voiceStartMs = frame.startTimeMs
+                    Log.i(
+                        DIAG,
+                        "VOICE_START (rms=${"%.1f".format(vad.lastRms)} peak=$framePeak " +
+                            "thr=${"%.1f".format(vad.lastThreshold)} zcr=${"%.3f".format(vad.lastZcr)} " +
+                            "floor=${"%.1f".format(vad.noiseFloor)})"
+                    )
+                }
                 lastVoiceEndMs = frameEndMs
                 silenceStartMs = null
                 return
@@ -235,7 +305,13 @@ class AudioRecorderService : Service() {
 
             val startMs = voiceStartMs ?: return
             val lastMs = lastVoiceEndMs ?: startMs
-            if (silenceStartMs == null) silenceStartMs = frame.startTimeMs
+            if (silenceStartMs == null) {
+                silenceStartMs = frame.startTimeMs
+                Log.i(
+                    DIAG,
+                    "SILENCE_START after voiceDur=${lastMs - startMs}ms (need ${silenceCommitGapMs}ms gap to commit)"
+                )
+            }
 
             val silenceGapMs = frameEndMs - (silenceStartMs ?: frame.startTimeMs)
             val voiceDurationMs = lastMs - startMs
@@ -247,7 +323,7 @@ class AudioRecorderService : Service() {
             diagCommitDurMs = voiceDurationMs
 
             if (voiceDurationMs >= Constants.VAD_MIN_VOICE_MS) {
-                pendingEvent = PendingEvent(
+                detectedEvent = DetectedEvent(
                     voiceStartMs = startMs,
                     voiceEndMs = lastMs,
                     triggerTimeMs = frameEndMs
@@ -259,42 +335,96 @@ class AudioRecorderService : Service() {
             Log.i(
                 DIAG,
                 "VAD event candidate: voiceDurMs=$diagCommitDurMs min=${Constants.VAD_MIN_VOICE_MS} " +
-                    "commit=${pendingEvent != null} (rms=${vad.lastRms} noiseFloor=${vad.noiseFloor})"
+                    "commit=${detectedEvent != null} (rms=${vad.lastRms} noiseFloor=${vad.noiseFloor})"
             )
         }
 
-        pendingEvent?.let { event ->
-            serviceScope.launch {
-                commitEvent(
-                    event = event,
-                    classifier = classifier,
-                    voiceMatcher = voiceMatcher,
-                    encoder = encoder,
-                    sampleRate = sampleRate
-                )
+        detectedEvent?.let { event ->
+            enqueueEvent(event, processingContext)
+        }
+    }
+
+    private fun enqueueEvent(event: DetectedEvent, processingContext: EventProcessingContext) {
+        val capturedEvent = captureEvent(event, processingContext.sampleRate) ?: return
+        lateinit var job: Job
+        job = serviceScope.launch(start = CoroutineStart.LAZY) {
+            eventProcessingMutex.withLock {
+                commitEvent(capturedEvent, processingContext)
             }
+        }
+        synchronized(commitJobsLock) { commitJobs += job }
+        job.invokeOnCompletion {
+            synchronized(commitJobsLock) { commitJobs -= job }
+        }
+        job.start()
+    }
+
+    private suspend fun flushPendingEvent() {
+        val event = synchronized(stateLock) {
+            val startMs = voiceStartMs ?: return@synchronized null
+            val endMs = lastVoiceEndMs ?: startMs
+            voiceStartMs = null
+            lastVoiceEndMs = null
+            silenceStartMs = null
+            if (endMs - startMs >= Constants.VAD_MIN_VOICE_MS) {
+                DetectedEvent(
+                    voiceStartMs = startMs,
+                    voiceEndMs = endMs,
+                    triggerTimeMs = System.currentTimeMillis()
+                )
+            } else {
+                null
+            }
+        }
+        val context = eventProcessingContext
+        if (event != null && context != null) {
+            Log.i(DIAG, "Force-committing pending event while recorder stops")
+            captureEvent(event, context.sampleRate)?.let { capturedEvent ->
+                eventProcessingMutex.withLock {
+                    commitEvent(capturedEvent, context)
+                }
+            }
+        }
+        awaitCommitJobs()
+    }
+
+    private fun captureEvent(event: DetectedEvent, sampleRate: Int): CapturedEvent? {
+        val activeRingBuffer = ringBuffer ?: return null
+        val snapshotDurationMs =
+            (event.triggerTimeMs - event.voiceStartMs + Constants.VAD_PADDING_MS)
+                .coerceAtLeast(Constants.VAD_MIN_VOICE_MS.toLong())
+        val snapshotSamples = activeRingBuffer.snapshotLast(
+            ((snapshotDurationMs * sampleRate) / 1000L)
+                .toInt()
+                .coerceAtLeast(sampleRate / 10)
+        )
+        if (snapshotSamples.isEmpty()) {
+            Log.i(DIAG, "DROP: ring-buffer snapshot empty")
+            return null
+        }
+        return CapturedEvent(event = event, pcmSnapshot = snapshotSamples)
+    }
+
+    private suspend fun awaitCommitJobs() {
+        while (true) {
+            val jobs = synchronized(commitJobsLock) { commitJobs.toList() }
+            if (jobs.isEmpty()) return
+            jobs.joinAll()
         }
     }
 
     private suspend fun commitEvent(
-        event: PendingEvent,
-        classifier: AudioClassifier,
-        voiceMatcher: VoiceMatcher,
-        encoder: PcmEncoder,
-        sampleRate: Int
+        capturedEvent: CapturedEvent,
+        processingContext: EventProcessingContext
     ) {
-        val activeRingBuffer = ringBuffer ?: return
-        val snapshotDurationMs = (event.triggerTimeMs - event.voiceStartMs + Constants.VAD_PADDING_MS)
-            .coerceAtLeast(Constants.VAD_MIN_VOICE_MS.toLong())
-        val snapshotSamples = activeRingBuffer.snapshotLast(
-            ((snapshotDurationMs * sampleRate) / 1000L).toInt().coerceAtLeast(sampleRate / 10)
-        )
-        if (snapshotSamples.isEmpty()) {
-            Log.i(DIAG, "DROP: ring-buffer snapshot empty")
-            return
-        }
+        val event = capturedEvent.event
+        val classifier = processingContext.classifier
+        val voiceMatcher = processingContext.voiceMatcher
+        val encoder = processingContext.encoder
+        val sampleRate = processingContext.sampleRate
+        val snapshotSamples = capturedEvent.pcmSnapshot
 
-        val cropped = AudioCropper.crop(
+        val cropped = AudioCropper.cropActiveSpan(
             samples = snapshotSamples,
             sampleRate = sampleRate,
             paddingMs = Constants.VAD_PADDING_MS
@@ -318,12 +448,20 @@ class AudioRecorderService : Service() {
             Log.i(DIAG, "DROP: classified SILENCE")
             return
         }
-        if (classification.type == AudioEventType.UNKNOWN && classification.confidence < UNKNOWN_CONFIDENCE_THRESHOLD) {
-            Log.i(DIAG, "DROP: UNKNOWN conf=${classification.confidence} < $UNKNOWN_CONFIDENCE_THRESHOLD")
-            return
+        // VAD already confirmed a sustained (>= VAD_MIN_VOICE_MS) acoustic event upstream, so the
+        // classifier's role here is to LABEL the event, not to re-gate it. Quiet bedroom coughs and
+        // movements routinely fall below every classifier's loudness/model thresholds (e.g. a real
+        // cough peaking at only ~7% full-scale) and come back UNKNOWN. Dropping those left the
+        // "Sounds & voices" list empty even though a genuine sound occurred. Keep every VAD-confirmed
+        // non-silence event as a reviewable clip; when the model can't label it, persist it as NOISE
+        // so nothing VAD caught is silently discarded.
+        val eventType = if (classification.type == AudioEventType.UNKNOWN) {
+            AudioEventType.NOISE
+        } else {
+            classification.type
         }
 
-        micAggregator.onEvent(classification.type)
+        micAggregator.onEvent(eventType)
 
         // Signal-only mode (#12): the classification has now fed the staging aggregator; stop here
         // so we never attribute, encode, or persist audio.
@@ -332,7 +470,7 @@ class AudioRecorderService : Service() {
             return
         }
 
-        val attribution = when (classification.type) {
+        val attribution = when (eventType) {
             AudioEventType.SNORE,
             AudioEventType.TALK -> voiceMatcher.match(featureVec)
             else -> AttributionResult(Attribution.UNKNOWN, 0f)
@@ -395,7 +533,7 @@ class AudioRecorderService : Service() {
                     startTime = startTime,
                     endTime = endTime,
                     durationSeconds = durationSeconds,
-                    type = classification.type.key,
+                    type = eventType.key,
                     attributedTo = attribution.attribution.key,
                     matchConfidence = attribution.confidence,
                     pitchHz = featureVec.pitchHz,
@@ -405,7 +543,7 @@ class AudioRecorderService : Service() {
                     date = date
                 )
             )
-            Log.i(DIAG, "PERSISTED recording: type=${classification.type.key} sessionId=$sessionId file=${savedFile.name}")
+            Log.i(DIAG, "PERSISTED recording: type=${eventType.key} sessionId=$sessionId file=${savedFile.name}")
         } catch (t: Throwable) {
             Log.e(DIAG, "DROP: insertRecording failed", t)
             savedFile.delete()
@@ -413,24 +551,32 @@ class AudioRecorderService : Service() {
     }
 
     private fun stopRecording() {
+        if (isStopping) return
         if (!isActive && collectionJob == null && pipeline == null) {
             aggregatorRef = null
             stopSelf()
             return
         }
+        isStopping = true
         isActive = false
         aggregatorRef = null
         pipeline?.stop()
-        collectionJob?.cancel()
+        val activeCollectionJob = collectionJob
         collectionJob = null
         rolloverJob?.cancel()
         rolloverJob = null
         mergeGapJob?.cancel()
         mergeGapJob = null
-        shutdownRecorder()
+        serviceScope.launch {
+            activeCollectionJob?.cancelAndJoin()
+            flushPendingEvent()
+            shutdownRecorder()
+        }
     }
 
     private fun shutdownRecorder() {
+        val restartSignalOnly = pendingStartSignalOnly
+        pendingStartSignalOnly = null
         aggregatorRef = null
         signalOnly = false
         rolloverJob?.cancel()
@@ -441,11 +587,17 @@ class AudioRecorderService : Service() {
         pipeline = null
         ringBuffer?.clear()
         ringBuffer = null
+        eventProcessingContext = null
         sessionId = null
         resetVoiceState()
         releaseWakeLock()
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
+        isStopping = false
+        if (restartSignalOnly != null) {
+            startRecording(restartSignalOnly)
+        } else {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
     }
 
     private fun resetVoiceState() {
@@ -525,6 +677,9 @@ class AudioRecorderService : Service() {
         pipeline = null
         ringBuffer?.clear()
         ringBuffer = null
+        eventProcessingContext = null
+        pendingStartSignalOnly = null
+        synchronized(commitJobsLock) { commitJobs.clear() }
         resetVoiceState()
         releaseWakeLock()
         serviceScope.cancel()

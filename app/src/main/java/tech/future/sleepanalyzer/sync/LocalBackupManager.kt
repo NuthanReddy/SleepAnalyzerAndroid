@@ -1,244 +1,337 @@
 package tech.future.sleepanalyzer.sync
 
-import kotlinx.coroutines.flow.first
-import org.json.JSONArray
+import android.content.Context
 import org.json.JSONObject
-import tech.future.sleepanalyzer.data.db.entity.AudioRecording
-import tech.future.sleepanalyzer.data.db.entity.SleepGoal
-import tech.future.sleepanalyzer.data.db.entity.SleepNote
-import tech.future.sleepanalyzer.data.db.entity.SleepSession
-import tech.future.sleepanalyzer.data.db.entity.UserProfile
+import tech.future.sleepanalyzer.data.db.AppDatabase
+import tech.future.sleepanalyzer.data.db.BackupDatabaseSnapshot
+import tech.future.sleepanalyzer.data.db.DATABASE_SCHEMA_VERSION
+import tech.future.sleepanalyzer.data.prefs.AppPreferences
 import tech.future.sleepanalyzer.data.repository.SleepRepository
+import java.io.BufferedInputStream
+import java.io.File
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.util.Locale
+import java.util.UUID
+import java.util.zip.Deflater
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
 
 /**
- * Serializes all on-device sleep data to a single JSON document and restores it. Unlike
- * [SyncRepository] (Firebase cloud sync), this writes to a user-chosen file via the Storage Access
- * Framework, so the export survives an app reinstall without any account. Audio *files* are not
- * embedded (only their metadata); the WAV captures live under app-private storage and are covered by
- * Android Auto Backup instead.
+ * Creates and restores a portable archive containing the complete Room database, app preferences,
+ * audio recordings, and voice-enrollment samples. Version-1 JSON backups remain importable.
  */
-class LocalBackupManager(private val repository: SleepRepository) {
+class LocalBackupManager(
+    context: Context,
+    private val repository: SleepRepository,
+    private val preferences: AppPreferences
+) {
+    private val appContext = context.applicationContext
 
-    /** Writes a full backup to [output]. Returns the number of records written. */
-    suspend fun exportTo(output: OutputStream): Result<Int> = runCatching {
-        val sessions = repository.getAllSessions().first()
-        val recordings = repository.getAllRecordings().first()
-        val notes = repository.getAllNotes().first()
-        val profile = repository.getUserProfile()
-        val goal = repository.getActiveGoalSync()
+    suspend fun exportTo(output: OutputStream): Result<BackupSummary> = runCatching {
+        val snapshotFile = File(appContext.cacheDir, "backup_export_${UUID.randomUUID()}.db")
+        try {
+            val databaseSnapshot = AppDatabase.createBackupSnapshot(appContext, snapshotFile)
+            val recordingMedia = databaseSnapshot.recordingFiles.map { (id, sourcePath) ->
+                prepareMedia(
+                    databaseId = id,
+                    sourcePath = sourcePath,
+                    archiveDirectory = RECORDINGS_DIRECTORY,
+                    filePrefix = "recording"
+                )
+            }
+            val voiceProfileMedia = databaseSnapshot.voiceProfileFiles.map { (id, sourcePath) ->
+                prepareMedia(
+                    databaseId = id,
+                    sourcePath = sourcePath,
+                    archiveDirectory = VOICE_PROFILES_DIRECTORY,
+                    filePrefix = "voice_profile"
+                )
+            }
 
-        val root = JSONObject().apply {
-            put("version", BACKUP_VERSION)
-            put("exportedAt", System.currentTimeMillis())
-            profile?.let { put("profile", profileJson(it)) }
-            goal?.let { put("goal", goalJson(it)) }
-            put("sessions", JSONArray().apply { sessions.forEach { put(sessionJson(it)) } })
-            put("recordings", JSONArray().apply { recordings.forEach { put(recordingJson(it)) } })
-            put("notes", JSONArray().apply { notes.forEach { put(noteJson(it)) } })
+            val manifest = createManifest(databaseSnapshot, recordingMedia, voiceProfileMedia)
+            ZipOutputStream(output.buffered()).use { zip ->
+                zip.setLevel(Deflater.BEST_SPEED)
+                zip.writeBytes(
+                    MANIFEST_ENTRY,
+                    manifest.toJson().toString(2).toByteArray(Charsets.UTF_8)
+                )
+                zip.writeFile(DATABASE_ENTRY, databaseSnapshot.databaseFile)
+                (recordingMedia + voiceProfileMedia).forEach { media ->
+                    zip.writeFile(media.entry.archivePath, media.source)
+                }
+            }
+
+            BackupSummary(
+                databaseRecords = databaseSnapshot.databaseRecords,
+                mediaFiles = recordingMedia.size + voiceProfileMedia.size
+            )
+        } finally {
+            snapshotFile.delete()
         }
-
-        output.bufferedWriter(Charsets.UTF_8).use { it.write(root.toString(2)) }
-        sessions.size + recordings.size + notes.size + (if (profile != null) 1 else 0) + (if (goal != null) 1 else 0)
     }
 
-    /** Restores a backup previously produced by [exportTo]. Returns the number of records restored. */
-    suspend fun importFrom(input: InputStream): Result<Int> = runCatching {
-        val text = input.bufferedReader(Charsets.UTF_8).use { it.readText() }
-        val root = JSONObject(text)
-        var restored = 0
+    suspend fun importFrom(input: InputStream): Result<BackupSummary> = runCatching {
+        val buffered = if (input is BufferedInputStream) input else BufferedInputStream(input)
+        buffered.mark(ZIP_SIGNATURE.size)
+        val signature = ByteArray(ZIP_SIGNATURE.size)
+        val signatureLength = buffered.read(signature)
+        buffered.reset()
+        if (signatureLength == ZIP_SIGNATURE.size && signature.contentEquals(ZIP_SIGNATURE)) {
+            importPortableArchive(buffered)
+        } else {
+            LegacyJsonBackupImporter(repository).importFrom(buffered)
+        }
+    }
 
-        root.optJSONObject("profile")?.let {
-            repository.upsertUserProfile(profileFrom(it))
-            restored++
+    private suspend fun importPortableArchive(input: InputStream): BackupSummary {
+        val stagingDirectory = File(
+            appContext.cacheDir,
+            "backup_restore_${UUID.randomUUID()}"
+        ).apply { mkdirs() }
+        try {
+            extractArchive(input, stagingDirectory)
+            val manifestFile = safeArchiveFile(stagingDirectory, MANIFEST_ENTRY)
+            if (!manifestFile.isFile) throw IOException("Backup manifest is missing")
+            val manifest = BackupManifest.fromJson(JSONObject(manifestFile.readText(Charsets.UTF_8)))
+            require(manifest.formatVersion == BackupManifest.CURRENT_FORMAT_VERSION) {
+                "Backup version ${manifest.formatVersion} is not supported"
+            }
+            require(manifest.databaseVersion == DATABASE_SCHEMA_VERSION) {
+                "Backup database version ${manifest.databaseVersion} does not match app version $DATABASE_SCHEMA_VERSION"
+            }
+
+            val databaseFile = safeArchiveFile(stagingDirectory, DATABASE_ENTRY)
+            if (!databaseFile.isFile) throw IOException("Backup database is missing")
+
+            val recordingsDirectory = File(appContext.filesDir, RECORDINGS_DIRECTORY)
+            val voiceProfilesDirectory = File(appContext.filesDir, VOICE_PROFILES_DIRECTORY)
+            val previousPreferences = preferences.createBackupSnapshot()
+            val installedMediaPaths = mutableListOf<String>()
+            try {
+                val recordingPaths = installMedia(
+                    entries = manifest.recordings,
+                    stagingDirectory = stagingDirectory,
+                    targetDirectory = recordingsDirectory,
+                    requiredArchiveDirectory = RECORDINGS_DIRECTORY
+                ).also { installedMediaPaths += it.values }
+                val voiceProfilePaths = installMedia(
+                    entries = manifest.voiceProfiles,
+                    stagingDirectory = stagingDirectory,
+                    targetDirectory = voiceProfilesDirectory,
+                    requiredArchiveDirectory = VOICE_PROFILES_DIRECTORY
+                ).also { installedMediaPaths += it.values }
+
+                preferences.restoreBackupSnapshot(manifest.preferences)
+                val restoredRecords = try {
+                    AppDatabase.restoreFromBackup(
+                        context = appContext,
+                        backupDatabase = databaseFile,
+                        recordingPaths = recordingPaths,
+                        voiceProfilePaths = voiceProfilePaths
+                    )
+                } catch (failure: Throwable) {
+                    try {
+                        preferences.restoreBackupSnapshot(previousPreferences)
+                    } catch (rollbackFailure: Throwable) {
+                        failure.addSuppressed(rollbackFailure)
+                    }
+                    throw failure
+                }
+                pruneUnreferencedFiles(recordingsDirectory, recordingPaths.values)
+                pruneUnreferencedFiles(voiceProfilesDirectory, voiceProfilePaths.values)
+
+                return BackupSummary(
+                    databaseRecords = restoredRecords,
+                    mediaFiles = recordingPaths.size + voiceProfilePaths.size
+                )
+            } catch (failure: Throwable) {
+                installedMediaPaths.forEach { File(it).delete() }
+                throw failure
+            }
+        } finally {
+            stagingDirectory.deleteRecursively()
         }
-        root.optJSONObject("goal")?.let {
-            runCatching { repository.insertGoal(goalFrom(it)) }
-            restored++
+    }
+
+    private fun prepareMedia(
+        databaseId: Long,
+        sourcePath: String,
+        archiveDirectory: String,
+        filePrefix: String
+    ): PreparedMedia {
+        val source = File(sourcePath)
+        if (!source.isFile) {
+            throw IOException("Referenced media file is missing: ${source.name.ifBlank { sourcePath }}")
         }
-        root.optJSONArray("sessions")?.let { arr ->
-            for (i in 0 until arr.length()) {
-                runCatching { repository.insertSession(sessionFrom(arr.getJSONObject(i))) }
-                restored++
+        val extension = source.extension
+            .lowercase(Locale.ROOT)
+            .takeIf { it.matches(SAFE_EXTENSION) }
+            ?.let { ".$it" }
+            .orEmpty()
+        val archivePath = "$archiveDirectory/${filePrefix}_$databaseId$extension"
+        return PreparedMedia(
+            entry = BackupMediaEntry(databaseId = databaseId, archivePath = archivePath),
+            source = source
+        )
+    }
+
+    private suspend fun createManifest(
+        databaseSnapshot: BackupDatabaseSnapshot,
+        recordingMedia: List<PreparedMedia>,
+        voiceProfileMedia: List<PreparedMedia>
+    ): BackupManifest = BackupManifest(
+        formatVersion = BackupManifest.CURRENT_FORMAT_VERSION,
+        databaseVersion = DATABASE_SCHEMA_VERSION,
+        exportedAt = System.currentTimeMillis(),
+        databaseRecords = databaseSnapshot.databaseRecords,
+        preferences = preferences.createBackupSnapshot(),
+        recordings = recordingMedia.map(PreparedMedia::entry),
+        voiceProfiles = voiceProfileMedia.map(PreparedMedia::entry)
+    )
+
+    private fun extractArchive(input: InputStream, stagingDirectory: File) {
+        var entryCount = 0
+        var extractedBytes = 0L
+        ZipInputStream(input.buffered()).use { zip ->
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                entryCount++
+                if (entryCount > MAX_ARCHIVE_ENTRIES) throw IOException("Backup has too many files")
+                if (entry.isDirectory) {
+                    zip.closeEntry()
+                    continue
+                }
+                if (!isAllowedArchivePath(entry.name)) {
+                    throw IOException("Unexpected backup entry: ${entry.name}")
+                }
+                val target = safeArchiveFile(stagingDirectory, entry.name)
+                target.parentFile?.mkdirs()
+                target.outputStream().buffered().use { output ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    while (true) {
+                        val read = zip.read(buffer)
+                        if (read < 0) break
+                        extractedBytes += read
+                        if (extractedBytes > MAX_UNCOMPRESSED_ARCHIVE_BYTES) {
+                            throw IOException("Backup is larger than the supported limit")
+                        }
+                        output.write(buffer, 0, read)
+                    }
+                }
+                zip.closeEntry()
             }
         }
-        root.optJSONArray("recordings")?.let { arr ->
-            for (i in 0 until arr.length()) {
-                runCatching { repository.insertRecording(recordingFrom(arr.getJSONObject(i))) }
-                restored++
-            }
+    }
+
+    private fun installMedia(
+        entries: List<BackupMediaEntry>,
+        stagingDirectory: File,
+        targetDirectory: File,
+        requiredArchiveDirectory: String
+    ): Map<Long, String> {
+        require(entries.map(BackupMediaEntry::databaseId).distinct().size == entries.size) {
+            "Backup contains duplicate media ids"
         }
-        root.optJSONArray("notes")?.let { arr ->
-            for (i in 0 until arr.length()) {
-                runCatching { repository.insertNote(noteFrom(arr.getJSONObject(i))) }
-                restored++
+        targetDirectory.mkdirs()
+        val installedFiles = mutableListOf<File>()
+        try {
+            return entries.associate { entry ->
+                require(entry.archivePath.startsWith("$requiredArchiveDirectory/")) {
+                    "Media entry is stored in the wrong backup directory"
+                }
+                val stagedFile = safeArchiveFile(stagingDirectory, entry.archivePath)
+                if (!stagedFile.isFile) {
+                    throw IOException("Backup media is missing: ${entry.archivePath}")
+                }
+                val target = File(targetDirectory, "${UUID.randomUUID()}_${stagedFile.name}")
+                copyAtomically(stagedFile, target)
+                installedFiles += target
+                entry.databaseId to target.absolutePath
             }
+        } catch (failure: Throwable) {
+            installedFiles.forEach(File::delete)
+            throw failure
         }
-        restored
     }
 
-    // --- Serialization ------------------------------------------------------
-
-    private fun profileJson(p: UserProfile) = JSONObject().apply {
-        put("id", p.id)
-        put("displayName", p.displayName)
-        put("dateOfBirth", p.dateOfBirth)
-        put("biologicalSex", p.biologicalSex)
-        put("heightCm", p.heightCm?.toDouble())
-        put("weightKg", p.weightKg?.toDouble())
-        put("activityLevel", p.activityLevel)
-        put("units", p.units)
-        put("sleepConditions", p.sleepConditions)
-        put("medications", p.medications)
-        put("typicalCaffeineCutoffHour", p.typicalCaffeineCutoffHour)
-        put("shiftWorkSchedule", p.shiftWorkSchedule)
-        put("updatedAt", p.updatedAt)
+    private fun copyAtomically(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        val temporary = File(target.parentFile, ".${target.name}.${UUID.randomUUID()}.tmp")
+        var completed = false
+        try {
+            source.copyTo(temporary, overwrite = true)
+            if (target.exists() && !target.delete()) {
+                throw IOException("Could not replace ${target.name}")
+            }
+            if (!temporary.renameTo(target)) {
+                temporary.copyTo(target, overwrite = true)
+            }
+            completed = true
+        } finally {
+            temporary.delete()
+            if (!completed) target.delete()
+        }
     }
 
-    private fun goalJson(g: SleepGoal) = JSONObject().apply {
-        put("id", g.id)
-        put("targetBedtimeHour", g.targetBedtimeHour)
-        put("targetBedtimeMinute", g.targetBedtimeMinute)
-        put("targetWakeHour", g.targetWakeHour)
-        put("targetWakeMinute", g.targetWakeMinute)
-        put("targetDurationMinutes", g.targetDurationMinutes)
-        put("targetScore", g.targetScore)
-        put("isActive", g.isActive)
-        put("createdAt", g.createdAt)
+    private fun pruneUnreferencedFiles(directory: File, referencedPaths: Collection<String>) {
+        val referenced = referencedPaths.mapTo(HashSet()) { File(it).absolutePath }
+        directory.listFiles()
+            ?.filter(File::isFile)
+            ?.filterNot { it.absolutePath in referenced }
+            ?.forEach(File::delete)
     }
 
-    private fun sessionJson(s: SleepSession) = JSONObject().apply {
-        put("id", s.id)
-        put("startTime", s.startTime)
-        put("endTime", s.endTime)
-        put("qualityScore", s.qualityScore)
-        put("durationMinutes", s.durationMinutes)
-        put("deepSleepMinutes", s.deepSleepMinutes)
-        put("lightSleepMinutes", s.lightSleepMinutes)
-        put("remSleepMinutes", s.remSleepMinutes)
-        put("awakeMinutes", s.awakeMinutes)
-        put("interruptions", s.interruptions)
-        put("moodBefore", s.moodBefore)
-        put("moodAfter", s.moodAfter)
-        put("date", s.date)
+    private fun safeArchiveFile(root: File, relativePath: String): File {
+        if (
+            relativePath.startsWith("/") ||
+            relativePath.contains('\\') ||
+            relativePath.split('/').any { it == ".." }
+        ) {
+            throw IOException("Unsafe backup path")
+        }
+        val file = File(root, relativePath)
+        val rootPath = root.canonicalPath + File.separator
+        if (!file.canonicalPath.startsWith(rootPath)) throw IOException("Unsafe backup path")
+        return file
     }
 
-    private fun recordingJson(r: AudioRecording) = JSONObject().apply {
-        put("id", r.id)
-        put("sessionId", r.sessionId)
-        put("filePath", r.filePath)
-        put("startTime", r.startTime)
-        put("endTime", r.endTime)
-        put("durationSeconds", r.durationSeconds)
-        put("type", r.type)
-        put("maxAmplitude", r.maxAmplitude)
-        put("date", r.date)
-        put("attributedTo", r.attributedTo)
-        put("matchConfidence", r.matchConfidence.toDouble())
-        put("pitchHz", r.pitchHz.toDouble())
-        put("croppedFromMs", r.croppedFromMs)
-        put("croppedToMs", r.croppedToMs)
-        put("transcript", r.transcript)
-    }
+    private fun isAllowedArchivePath(path: String): Boolean =
+        path == MANIFEST_ENTRY ||
+            path == DATABASE_ENTRY ||
+            path.startsWith("$RECORDINGS_DIRECTORY/") ||
+            path.startsWith("$VOICE_PROFILES_DIRECTORY/")
 
-    private fun noteJson(n: SleepNote) = JSONObject().apply {
-        put("id", n.id)
-        put("sessionId", n.sessionId)
-        put("date", n.date)
-        put("tags", n.tags)
-        put("note", n.note)
-        put("createdAt", n.createdAt)
-    }
-
-    // --- Deserialization ----------------------------------------------------
-
-    private fun profileFrom(j: JSONObject) = UserProfile(
-        id = j.optLong("id", UserProfile.SINGLETON_ID),
-        displayName = j.optStringOrNull("displayName"),
-        dateOfBirth = j.optLongOrNull("dateOfBirth"),
-        biologicalSex = j.optStringOrNull("biologicalSex"),
-        heightCm = j.optFloatOrNull("heightCm"),
-        weightKg = j.optFloatOrNull("weightKg"),
-        activityLevel = j.optStringOrNull("activityLevel"),
-        units = j.optString("units", "metric"),
-        sleepConditions = j.optString("sleepConditions", ""),
-        medications = j.optStringOrNull("medications"),
-        typicalCaffeineCutoffHour = j.optIntOrNull("typicalCaffeineCutoffHour"),
-        shiftWorkSchedule = j.optStringOrNull("shiftWorkSchedule"),
-        updatedAt = j.optLong("updatedAt", System.currentTimeMillis())
-    )
-
-    private fun goalFrom(j: JSONObject) = SleepGoal(
-        id = j.optLong("id", 0L),
-        targetBedtimeHour = j.optInt("targetBedtimeHour", 23),
-        targetBedtimeMinute = j.optInt("targetBedtimeMinute", 0),
-        targetWakeHour = j.optInt("targetWakeHour", 7),
-        targetWakeMinute = j.optInt("targetWakeMinute", 0),
-        targetDurationMinutes = j.optInt("targetDurationMinutes", 480),
-        targetScore = j.optInt("targetScore", 80),
-        isActive = j.optBoolean("isActive", true),
-        createdAt = j.optLong("createdAt", System.currentTimeMillis())
-    )
-
-    private fun sessionFrom(j: JSONObject) = SleepSession(
-        id = j.optLong("id", 0L),
-        startTime = j.optLong("startTime", 0L),
-        endTime = j.optLongOrNull("endTime"),
-        qualityScore = j.optInt("qualityScore", 0),
-        durationMinutes = j.optInt("durationMinutes", 0),
-        deepSleepMinutes = j.optInt("deepSleepMinutes", 0),
-        lightSleepMinutes = j.optInt("lightSleepMinutes", 0),
-        remSleepMinutes = j.optInt("remSleepMinutes", 0),
-        awakeMinutes = j.optInt("awakeMinutes", 0),
-        interruptions = j.optInt("interruptions", 0),
-        moodBefore = j.optStringOrNull("moodBefore"),
-        moodAfter = j.optStringOrNull("moodAfter"),
-        isTracking = false,
-        date = j.optString("date", "")
-    )
-
-    private fun recordingFrom(j: JSONObject) = AudioRecording(
-        id = j.optLong("id", 0L),
-        sessionId = j.optLongOrNull("sessionId"),
-        filePath = j.optString("filePath", ""),
-        startTime = j.optLong("startTime", 0L),
-        endTime = j.optLong("endTime", 0L),
-        durationSeconds = j.optInt("durationSeconds", 0),
-        type = j.optString("type", "unknown"),
-        maxAmplitude = j.optInt("maxAmplitude", 0),
-        date = j.optString("date", ""),
-        attributedTo = j.optString("attributedTo", "unknown"),
-        matchConfidence = j.optDouble("matchConfidence", 0.0).toFloat(),
-        pitchHz = j.optDouble("pitchHz", 0.0).toFloat(),
-        croppedFromMs = j.optInt("croppedFromMs", 0),
-        croppedToMs = j.optInt("croppedToMs", 0),
-        transcript = if (j.isNull("transcript")) null else j.optString("transcript", null)
-    )
-
-    private fun noteFrom(j: JSONObject) = SleepNote(
-        id = j.optLong("id", 0L),
-        sessionId = j.optLongOrNull("sessionId"),
-        date = j.optString("date", ""),
-        tags = j.optString("tags", ""),
-        note = j.optString("note", ""),
-        createdAt = j.optLong("createdAt", System.currentTimeMillis())
+    private data class PreparedMedia(
+        val entry: BackupMediaEntry,
+        val source: File
     )
 
     companion object {
-        const val BACKUP_VERSION = 1
-        const val FILE_PREFIX = "sleep_analyzer_backup"
+        const val MIME_TYPE = "application/zip"
+        const val FILE_EXTENSION = "sleepbackup"
+
+        private const val MANIFEST_ENTRY = "manifest.json"
+        private const val DATABASE_ENTRY = "database/${AppDatabase.DATABASE_NAME}"
+        private const val RECORDINGS_DIRECTORY = "recordings"
+        private const val VOICE_PROFILES_DIRECTORY = "voice_profiles"
+        private const val MAX_ARCHIVE_ENTRIES = 100_000
+        private const val MAX_UNCOMPRESSED_ARCHIVE_BYTES = 2L * 1024L * 1024L * 1024L
+        private val ZIP_SIGNATURE = byteArrayOf(0x50, 0x4B, 0x03, 0x04)
+        private val SAFE_EXTENSION = Regex("[a-z0-9]{1,8}")
     }
 }
 
-private fun JSONObject.optStringOrNull(name: String): String? =
-    if (isNull(name)) null else optString(name, "").takeIf { it.isNotEmpty() }
+private fun ZipOutputStream.writeBytes(path: String, bytes: ByteArray) {
+    putNextEntry(ZipEntry(path))
+    write(bytes)
+    closeEntry()
+}
 
-private fun JSONObject.optLongOrNull(name: String): Long? =
-    if (has(name) && !isNull(name)) optLong(name) else null
-
-private fun JSONObject.optIntOrNull(name: String): Int? =
-    if (has(name) && !isNull(name)) optInt(name) else null
-
-private fun JSONObject.optFloatOrNull(name: String): Float? =
-    if (has(name) && !isNull(name)) optDouble(name).toFloat() else null
+private fun ZipOutputStream.writeFile(path: String, source: File) {
+    putNextEntry(ZipEntry(path))
+    source.inputStream().buffered().use { it.copyTo(this) }
+    closeEntry()
+}

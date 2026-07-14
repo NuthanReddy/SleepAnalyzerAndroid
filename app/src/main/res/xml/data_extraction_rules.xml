@@ -8,7 +8,6 @@
         <include domain="database" path="." />
         <include domain="sharedpref" path="." />
         <include domain="file" path="datastore/" />
-        <exclude domain="file" path="recordings/" />
     </cloud-backup>
     <device-transfer>
         <include domain="database" path="." />
