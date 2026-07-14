@@ -14,6 +14,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.IBinder
 import android.os.PowerManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -174,6 +175,11 @@ class SleepTrackingService : Service(), SensorEventListener {
             val captureEnabled = runCatching { prefs.recordAudioDuringTrackingFlow.first() }.getOrDefault(false)
             val stagingEnabled = runCatching { prefs.micForStagingEnabledFlow.first() }.getOrDefault(false)
             val micGranted = PermissionsUtil.isRecordAudioGranted(this@SleepTrackingService)
+            Log.i(
+                "SleepAudioDiag",
+                "recorder-start gate: capture=$captureEnabled staging=$stagingEnabled " +
+                    "micGranted=$micGranted isTracking=$isTracking"
+            )
             if (isTracking && micGranted && (captureEnabled || stagingEnabled)) {
                 val action = if (captureEnabled) {
                     startedRecorderForCapture = true
@@ -188,7 +194,15 @@ class SleepTrackingService : Service(), SensorEventListener {
                         AudioRecorderService::class.java
                     ).setAction(action)
                     ContextCompat.startForegroundService(this@SleepTrackingService, recorderIntent)
+                    Log.i("SleepAudioDiag", "started AudioRecorderService action=$action")
+                }.onFailure {
+                    Log.e("SleepAudioDiag", "FAILED to start AudioRecorderService (recorder will not run)", it)
                 }
+            } else {
+                Log.w(
+                    "SleepAudioDiag",
+                    "recorder NOT started (gate failed: need isTracking && micGranted && (capture||staging))"
+                )
             }
         }
     }

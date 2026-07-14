@@ -10,6 +10,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -97,6 +98,10 @@ class AudioRecorderService : Service() {
         private const val UNKNOWN_CONFIDENCE_THRESHOLD = 0.5f
         private const val MIC_ROLLOVER_INTERVAL_MS = 60_000L
 
+        // Temporary diagnostic tag for triaging why sleep-session sound events (coughs/talks) are
+        // not being persisted. Filter logcat with: adb logcat -s SleepAudioDiag
+        private const val DIAG = "SleepAudioDiag"
+
         @Volatile
         private var aggregatorRef: MicSleepSignalAggregator? = null
 
@@ -136,6 +141,7 @@ class AudioRecorderService : Service() {
         }
 
         this.signalOnly = signalOnly
+        Log.i(DIAG, "startRecording: signalOnly=$signalOnly (full-capture=${!signalOnly})")
         createNotificationChannel()
         startForegroundRecorder(signalOnly)
         acquireWakeLock()
@@ -191,12 +197,14 @@ class AudioRecorderService : Service() {
 
                 ringBuffer = requireNotNull(builder.ringBuffer())
                 pipeline = builder.build()
+                Log.i(DIAG, "pipeline built; classifier=${classifier::class.simpleName}; collecting frames (sessionId=$sessionId)")
                 pipeline?.frames()?.collect {
                     micAggregator.onFrame(rms = vad.lastRms, isVoice = vad.lastIsVoice)
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Throwable) {
+            } catch (t: Throwable) {
+                Log.e(DIAG, "recorder pipeline failed; shutting down (no events will be recorded)", t)
                 shutdownRecorder()
             }
         }
@@ -215,6 +223,7 @@ class AudioRecorderService : Service() {
         val isVoiceFrame = vad.process(frame) != null
 
         var pendingEvent: PendingEvent? = null
+        var diagCommitDurMs = -1L
 
         synchronized(stateLock) {
             if (isVoiceFrame) {
@@ -235,6 +244,7 @@ class AudioRecorderService : Service() {
             voiceStartMs = null
             lastVoiceEndMs = null
             silenceStartMs = null
+            diagCommitDurMs = voiceDurationMs
 
             if (voiceDurationMs >= Constants.VAD_MIN_VOICE_MS) {
                 pendingEvent = PendingEvent(
@@ -243,6 +253,14 @@ class AudioRecorderService : Service() {
                     triggerTimeMs = frameEndMs
                 )
             }
+        }
+
+        if (diagCommitDurMs >= 0) {
+            Log.i(
+                DIAG,
+                "VAD event candidate: voiceDurMs=$diagCommitDurMs min=${Constants.VAD_MIN_VOICE_MS} " +
+                    "commit=${pendingEvent != null} (rms=${vad.lastRms} noiseFloor=${vad.noiseFloor})"
+            )
         }
 
         pendingEvent?.let { event ->
@@ -271,22 +289,37 @@ class AudioRecorderService : Service() {
         val snapshotSamples = activeRingBuffer.snapshotLast(
             ((snapshotDurationMs * sampleRate) / 1000L).toInt().coerceAtLeast(sampleRate / 10)
         )
-        if (snapshotSamples.isEmpty()) return
+        if (snapshotSamples.isEmpty()) {
+            Log.i(DIAG, "DROP: ring-buffer snapshot empty")
+            return
+        }
 
         val cropped = AudioCropper.crop(
             samples = snapshotSamples,
             sampleRate = sampleRate,
             paddingMs = Constants.VAD_PADDING_MS
         )
-        if (cropped.pcm.isEmpty()) return
+        if (cropped.pcm.isEmpty()) {
+            Log.i(DIAG, "DROP: cropped PCM empty (AudioCropper trimmed everything)")
+            return
+        }
 
         val features = AudioFeatures(sampleRate)
         val featureVec = FeatureVector(bandEnergies = FloatArray(13))
         features.extract(cropped.pcm, 0, cropped.pcm.size, featureVec)
 
         val classification = classifier.classify(cropped.pcm, 0, cropped.pcm.size, sampleRate, featureVec)
-        if (classification.type == AudioEventType.SILENCE) return
+        Log.i(
+            DIAG,
+            "commitEvent classified: type=${classification.type} conf=${classification.confidence} " +
+                "rms=${featureVec.rms} peak=${featureVec.peak} pcmSamples=${cropped.pcm.size}"
+        )
+        if (classification.type == AudioEventType.SILENCE) {
+            Log.i(DIAG, "DROP: classified SILENCE")
+            return
+        }
         if (classification.type == AudioEventType.UNKNOWN && classification.confidence < UNKNOWN_CONFIDENCE_THRESHOLD) {
+            Log.i(DIAG, "DROP: UNKNOWN conf=${classification.confidence} < $UNKNOWN_CONFIDENCE_THRESHOLD")
             return
         }
 
@@ -294,7 +327,10 @@ class AudioRecorderService : Service() {
 
         // Signal-only mode (#12): the classification has now fed the staging aggregator; stop here
         // so we never attribute, encode, or persist audio.
-        if (signalOnly) return
+        if (signalOnly) {
+            Log.i(DIAG, "DROP: signalOnly mode (staging only, not persisting)")
+            return
+        }
 
         val attribution = when (classification.type) {
             AudioEventType.SNORE,
@@ -369,7 +405,9 @@ class AudioRecorderService : Service() {
                     date = date
                 )
             )
-        } catch (_: Throwable) {
+            Log.i(DIAG, "PERSISTED recording: type=${classification.type.key} sessionId=$sessionId file=${savedFile.name}")
+        } catch (t: Throwable) {
+            Log.e(DIAG, "DROP: insertRecording failed", t)
             savedFile.delete()
         }
     }
