@@ -1,0 +1,5 @@
+﻿Went to bed;Woke up;Sleep Quality;Time in bed (seconds);Time asleep (seconds);Asleep after (seconds);Regularity;Did snore;Snore time (seconds);Coughing (per hour);City;Alertness score;Alertness reaction time (seconds);Alertness accuracy;Movements per hour;Wake up window start;Wake up window stop
+2020-07-14 22:45:06;2020-07-15 04:32:53;51%;20866;18153;1391;—;false;0;0.0;;;;;61.74435;20-07-15 04:30:00;20-07-15 05:00:00
+2021-04-30 00:00:15;2021-04-30 06:11:38;58%;22282;18791;445;—;false;0;0.0;;;;;67.689644;21-04-30 06:00:00;21-04-30 06:30:00
+2021-11-15 03:11:23;2021-11-15 08:02:55;50%;17492;13119;1224;—;true;1436;0.0;;;;;123.29463;21-11-15 08:00:00;21-11-15 08:30:00
+2021-12-05 04:07:10;2021-12-05 10:01:16;68%;21245;16854;424;—;true;1424;0.0;;;;;101.16467;21-12-05 10:00:00;21-12-05 10:30:00
