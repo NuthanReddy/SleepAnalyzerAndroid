@@ -160,7 +160,8 @@ Sleep Analyzer is **on‑device first**. Raw audio, accelerometer data, and on�
 |---|---|
 | [`docs/features.md`](docs/features.md) | User‑facing feature inventory |
 | [`docs/architecture.md`](docs/architecture.md) | Architecture, diagrams, design patterns, changelog |
-| [`docs/adr/`](docs/adr/README.md) | Architecture Decision Records (0001–0006) |
+| [`docs/neural-audio-pipeline.md`](docs/neural-audio-pipeline.md) | Design for the planned neural (ML) audio classification pipeline |
+| [`docs/adr/`](docs/adr/README.md) | Architecture Decision Records (0001–0007) |
 | [`docs/backlog.md`](docs/backlog.md) | Intentionally deferred work + acceptance criteria |
 | [`docs/issues.md`](docs/issues.md) | Review findings and their resolutions |
 

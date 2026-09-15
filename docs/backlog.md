@@ -328,7 +328,91 @@ Each entry has a fixed shape:
 
 ---
 
+## Neural audio pipeline
+
+> Design: [`neural-audio-pipeline.md`](neural-audio-pipeline.md) · Decision: [ADR-0007](adr/0007-tiered-neural-audio-pipeline.md).
+> These four items are strictly sequential — each is a gate on the next.
+
+### 27. Neural audio benchmark harness + labelled evaluation set
+
+- **What**: The measurement foundation for everything else. (a) An instrumented benchmark that reports real-time factor, per-invocation latency, and peak memory for YAMNet, Silero VAD, and Whisper-tiny int8 on low-end, mid-range, and flagship devices. (b) A labelled evaluation set of 20–30 nights with human-verified event labels (snore / cough / talk / sneeze / gasp / movement / environment / silence), scored against `SpectralClassifier` as the baseline.
+- **Why**: ADR-0007's cost table is an *estimate*. The decision to tier is robust across the plausible range, but the choice of model, thread count, delegate, and minimum device tier is not — those need data. Without a baseline comparison we cannot tell whether a neural classifier is actually better, only that it is bigger.
+- **Acceptance**:
+  - Benchmark runs on ≥ 3 device classes and emits a committed results table.
+  - Evaluation set stored with labels (features + labels only — **no raw audio in the repo or in any upload**, per ADR-0005).
+  - Per-class precision/recall for `SpectralClassifier` published as the baseline to beat.
+  - **Tier-0 activity-gate recall measured and published.** This is the system-wide ceiling: any event the gate drops is invisible to every downstream tier and to any later offline pass (#31), so no model choice can recover it. Tune Tier 0 for high recall at the cost of precision — a Tier-1 false positive costs ~20 ms, a Tier-0 false negative costs the event.
+- **Dependencies**: None — this is the first phase.
+- **Notes**: Snore precision is the metric that matters most, because snoring drives the quality score. A model that improves recall while regressing snore precision is a net loss. Include a snore-heavy night to validate the episode rate limiter.
+- **Status**: Open.
+
+### 28. Tier 1 — YAMNet event tagging behind a default-off flag
+
+- **What**: Introduce the `PcmClassifier` interface, add `ClassifierFactory.Backend.NEURAL`, wire YAMNet (~4 MB TFLite) as a `NeuralAudioClassifier`, deliver the model on demand (Play Feature Delivery or verified `DownloadManager`), and add the episode rate limiter. Add the new `AudioEventType` values (`SNEEZE`, `GASP`, `BREATHING`, `MOVEMENT`, `ENVIRONMENT`) plus the additive Room migration for `AudioRecording.classifierBackend` / `modelVersion`.
+- **Why**: This is the actual accuracy win — it replaces four threshold rules with an AudioSet-pretrained tagger, and it is where cough/talk detection stops being a loudness proxy. One YAMNet pass emits `Snoring` (38), `Cough` (42), `Sneeze` (44), `Breathing` (36), `Gasp` (39), `Snort` (41) and `Speech` (0), so no per-event backbone (AST, PANNs-CNN14) is needed. It also labels the main TALK confounders directly — `Television` (518), `Radio` (519), `Music` (132) — and the usual bedroom noise sources, `Mechanical fan` (406) / `Air conditioning` (407) / `Mains hum` (510).
+- **Acceptance**:
+  - Beats the #27 baseline on cough and talk precision-recall, without regressing snore precision.
+  - Overnight battery delta **< 3%** and no thermal throttling in an A/B full-night run.
+  - Tier-1 invocation count stays bounded on a snore-heavy night (rate limiter validated).
+  - `SpectralClassifier` fallback verified when the model is absent, the download fails, or the device is below the capability bar.
+  - Interpreter is a single lazy `ServiceLocator` instance, released in `onDestroy`; no native leak over a simulated 8 h session.
+- **Dependencies**: #27.
+- **Notes**: `AudioEventType` needs **no** migration (persisted as a string `key`, and `fromKey` already falls back to `UNKNOWN`); `AudioRecording` does. Keep NNAPI/GPU delegates off by default — delegate init can cost more than it saves for short, infrequent invocations. MobileNet-PANNs is the fallback if YAMNet under-performs on snore.
+- **Status**: Open.
+
+### 29. Tier 2 — sleep-talk detection (metadata only)
+
+- **What**: Add Silero VAD (~1.8 MB ONNX) as a **branch fed by Tier 1's `Speech` label** — never as a gate ahead of the classifier — producing speech segment boundaries, and surface sleep-talking as episode count / timing / duration. **No transcription, no text.** Opt-in, default off.
+- **Why**: "You talked in your sleep for 12 seconds at 03:41" is the feature users actually want, and it is achievable at ~1.8 MB with none of the privacy exposure of ASR.
+- **Acceptance**:
+  - Segment boundaries validated against the #27 labelled set.
+  - Detection is opt-in and default off; disabling it downloads nothing.
+  - Signal-only recorder mode (`ACTION_START_SIGNAL_ONLY`) still retains **zero** audio and runs **zero** inference.
+- **Dependencies**: #28.
+- **Notes**: Deliberately do **not** use `pyannote` — PyTorch, gated on Hugging Face, no supported Android runtime path. Ship this even if #30 never ships; it is the more valuable half of the speech branch.
+- **Status**: Open.
+
+### 30. Tier 3 — opt-in on-device sleep-talk transcription
+
+- **What**: Whisper-tiny.en int8 (~40 MB) as a separate on-demand module, running on-device over confirmed speech segments only. A **second** opt-in, independent of #29 and impossible to enable without it. Short default retention (e.g. 7 days), one-tap "delete all transcripts", inclusion in the existing data-deletion flow.
+- **Why**: Some users genuinely want to know *what* they said. But this is the most privacy-sensitive artifact the app could produce, so it is last and most heavily gated.
+- **Acceptance**:
+  - Measured WER on the #27 set is good enough to present honestly — **if it is not, ship detection-only and close this item as Won't Do.**
+  - Transcripts are excluded from sync payloads by document **shape**, not by a settings check, with a unit test asserting no transcript field appears in any `SyncRepository` upload.
+  - Consent copy states what is recorded, that it stays on-device, retention duration, how to delete, and that **other people in the room may be captured**.
+  - Privacy review signed off; ADR-0005 amended (or a new ADR added) stating that text derived from audio is treated as raw audio.
+- **Dependencies**: #29.
+- **Notes**: Sleep speech is slurred, mumbled, low-amplitude and recorded metres away — expect high WER; a confidently-wrong transcript of bedroom speech is worse than no transcript. A partner never consented, so default-off is the only defensible posture. Bigger Whisper variants do not rescue this failure mode: the bottleneck is acoustic, not linguistic, and `small` (244 M params, ~2 GB VRAM) or `turbo` (809 M, ~6 GB) are undeployable in an all-night foreground service regardless. If `tiny.en` is inadequate, the answer is detection-only, not a larger model.
+- **Status**: Open.
+
+### 31. Tier 4 — offline deep pass on retained clips (opt-in, on charger)
+
+- **What**: A post-session WorkManager job that re-scores the night's retained `AudioRecording` clips with heavier models than the always-on path can afford — **DeepFilterNet3 → AST / PANNs-CNN14**, and optionally a larger Whisper for users who already opted into transcripts (#30). Constrained to `requiresCharging` + `requiresDeviceIdle`, with an additional ~350 MB opt-in model download. Persists a Tier-4 label alongside the Tier-1 label rather than overwriting it.
+- **Why**: The constraints that make DFN3/AST untenable in a continuous 8 h foreground service — RTF, thermals, battery — largely disappear when the work is batched, bounded, and mains-powered. This is the one place the heavyweight stack is genuinely the right tool. Tier-1 vs Tier-4 disagreements are also directly useful as a training/eval signal for #27.
+- **Acceptance**:
+  - Measurably beats the Tier-1 (#28) labels on the #27 evaluation set — **if it does not, close as Won't Do**; the whole premise is that the heavy models earn their cost here.
+  - Never runs off-charger, never blocks the morning summary, and is fully abandonable mid-run.
+  - Models are an explicit opt-in download, never bundled; base APK unchanged.
+  - No Tier 4 at all in signal-only mode (nothing is retained to re-score) — verified by test.
+  - Tier-1 and Tier-4 labels are both retained and distinguishable via `classifierBackend` / `modelVersion` (#28).
+- **Dependencies**: #27, #28.
+- **Notes**: Cannot rescue Tier-0 recall — a deep pass only sees what was retained, and retaining the full night is not an option at 22 050 Hz × 16-bit × 8 h ≈ **1.27 GB**, which is unacceptable on storage *and* privacy grounds. Tier-0 recall remains the system-wide ceiling in every architecture, which is why it is an explicit acceptance criterion in #27.
+- **Status**: Open.
+
+---
+
 ## Changelog
+
+- 2026-08-09 Added **#27–#31** (neural audio pipeline), derived from
+  [`neural-audio-pipeline.md`](neural-audio-pipeline.md) / [ADR-0007](adr/0007-tiered-neural-audio-pipeline.md).
+  A proposed linear ML chain (DeepFilterNet3 → pyannote VAD → AST/PANNs → Whisper) was redesigned as a
+  tiered cascade after three blocking findings: pyannote VAD as a serial gate would discard snore and
+  cough; continuous denoiser+segmenter+AST inference costs an estimated 2.4–6.8 h of sustained CPU per
+  night; and the models total ~380–425 MB against a 3.38 MB APK while Whisper conflicts with ADR-0005.
+  Items #27–#30 are strictly sequential and each gates the next; #30 may legitimately close as
+  Won't Do if measured WER is poor. **#31** adds an optional post-session deep pass that runs the
+  heavyweight models (DFN3 + AST) on retained clips while charging — the one context where their cost
+  is justified — and may likewise close as Won't Do if it does not beat #28 on the #27 eval set.
 
 - 2026-07-11 Feature batch (**#7 partial, #11, #12, #13, #18**). Landed the buildable remainder of the
   backlog, each with a pure unit-tested core plus thin Android glue; JVM suite now **103 green** (JDK 17,

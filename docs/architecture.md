@@ -386,6 +386,13 @@ Why this shape:
 
 Pipeline configuration is built with `AudioPipeline.Builder` so future changes (e.g. swap in a TFLite classifier) are one-line wiring changes.
 
+> **Planned evolution:** replacing the heuristic `SpectralClassifier` with learned models is designed
+> in [`neural-audio-pipeline.md`](neural-audio-pipeline.md) and decided in
+> [ADR-0007](adr/0007-tiered-neural-audio-pipeline.md). The short version: a **tiered cascade**
+> (DSP activity gate → YAMNet event tagging on candidate windows → Silero VAD on speech candidates →
+> opt-in Whisper), *not* a linear always-on chain. Capture, ring-buffering, cropping, and encoding
+> above are unchanged by that work; nothing is implemented yet.
+
 ## 7a. Smart Wake & Sleep Stage Prediction
 
 The "wake window" feature is not really smart unless we actually watch the sleeper during the window and pick the optimal moment. New `sleep/` package handles that, independently of the audio pipeline. The estimator is **multi-signal**: it works with motion alone, but if HR/HRV (or other wearable signals) are present, it uses them to refine the stage prediction.
@@ -825,7 +832,7 @@ sequenceDiagram
     REPO-->>VM: profile id
     VM-->>OB: enrollmentResult=profile
     U->>OB: Continue
-    OB->>VM: enableVoiceIsolation(true); completeOnboarding()
+    OB->>VM: enableVoiceIsolation(true) then completeOnboarding()
 ```
 
 At inference time (inside `AudioRecorderService`), `VoiceMatcherFactory.create(activeProfile, isolationEnabled)` returns:
@@ -984,6 +991,11 @@ DataStore key set lives in `AppPreferences`:
 | `RestingHeartRateRecord` calibration of multi-signal baseline HR — see Section 7d.4 | Done | Main agent |
 | `SkinTemperatureRecord` consumption after SDK bump — see Section 7d.4 | Designed | Planned |
 | Nutrition/Hydration/body-temperature context in Sleep Result (`HealthContextInsights` card) — backlog #7 | Partial | Main agent |
+| Neural audio pipeline — benchmark harness + labelled eval set (backlog #27) — see [design](neural-audio-pipeline.md) / [ADR-0007](adr/0007-tiered-neural-audio-pipeline.md) | Designed | Planned |
+| Neural audio pipeline — Tier 1 YAMNet event tagging behind a default-off flag (backlog #28) | Designed | Planned |
+| Neural audio pipeline — Tier 2 sleep-talk detection, metadata only (backlog #29) | Designed | Planned |
+| Neural audio pipeline — Tier 3 opt-in on-device transcription (backlog #30) | Designed | Planned |
+| Neural audio pipeline — Tier 4 offline deep pass on retained clips, on charger (backlog #31) | Designed | Optional follow-up |
 
 ## 12. Optional Data & Graceful Degradation
 
@@ -1134,15 +1146,15 @@ stateDiagram-v2
 
 ```mermaid
 flowchart TD
-    U[users/{uid}] --> P[profile/main]
+    U["users/{uid}"] --> P[profile/main]
     U --> G[goals/active]
-    U --> D[daily_summary/{date}]
-    U --> S[sessions/{sessionId}]
-    U --> A[audio_events/{recordingId}]
-    U --> N[notes/{noteId}]
-    R[data_requests/{requestId}] --> RT[type=export|delete]
-    R --> RS[status=pending]
-    R --> RU[uid + phoneNumber + email]
+    U --> D["daily_summary/{date}"]
+    U --> S["sessions/{sessionId}"]
+    U --> A["audio_events/{recordingId}"]
+    U --> N["notes/{noteId}"]
+    R["data_requests/{requestId}"] --> RT["type=export|delete"]
+    R --> RS["status=pending"]
+    R --> RU["uid + phoneNumber + email"]
 ```
 
 ### 13e. What syncs
@@ -1181,6 +1193,38 @@ flowchart TD
 - Phone numbers are treated as PII; the app only logs masked/DEBUG-only verification traces and never syncs raw SMS content.
 
 ## Changelog
+
+- 2026-08-09 Designed the **neural audio pipeline** (docs only — no production code changed). Added
+  [`docs/neural-audio-pipeline.md`](neural-audio-pipeline.md) and
+  [ADR-0007](adr/0007-tiered-neural-audio-pipeline.md), evaluating the proposed linear chain
+  *(DeepFilterNet3 → pyannote VAD → AST/PANNs → Whisper)* and restructuring it as a **tiered
+  cascade**. Three blocking findings drove the redesign: (1) `pyannote` VAD is a *speech* detector,
+  so as a serial gate it would discard snore and cough — the pipeline's own headline outputs — and
+  regress the deliberate "VAD is observed, not applied" property of §7; (2) running denoiser +
+  segmenter + AST continuously costs an estimated 2.4–6.8 h of sustained single-core CPU per 8 h
+  night, against the §5 "lighter app" goal; (3) the four models total ~380–425 MB against a 3.38 MB
+  APK, and Whisper turns transient bedroom speech into durable searchable text, colliding with
+  ADR-0005. The design keeps the DSP path as an always-on Tier-0 activity gate, swaps AST/PANNs for
+  **YAMNet** (~4 MB) on candidate windows only with an **episode rate limiter** for habitual snorers,
+  swaps `pyannote` for **Silero VAD** (~1.8 MB) as a *branch* off the classifier's `Speech` label,
+  defers denoising entirely (speech-target denoisers may attenuate snore/cough), ships models
+  on-demand to keep the base APK at ~3.4 MB, and makes transcription doubly opt-in with local-only
+  retention. Added §7 pointer, §11 workstreams, and backlog #27–#30. A follow-up task-by-task model
+  survey (PANNs-CNN14 for cough, snore-fine-tuned AST, Whisper Small/Turbo) was reconciled in §5.3 of
+  the design doc: verified against the published YAMNet class map, a single ~4 MB pass already emits
+  `Snoring` (38), `Cough` (42), `Sneeze` (44), `Breathing` (36), `Gasp` (39), `Snort` (41) and
+  `Speech` (0), so per-event backbones would ship ~630 MB and three forward passes for the same
+  labels; YAMNet additionally labels the noise sources a denoiser was proposed for — `Mechanical fan`
+  (406), `Air conditioning` (407), `Mains hum` (510) — plus the TALK confounders `Television` (518),
+  `Radio` (519) and `Music` (132). Whisper `small` (244 M) / `turbo` (809 M) were rejected against
+  `tiny.en` (39 M) on footprint, and because sleep-talk transcription fails acoustically rather than
+  linguistically. Where the heavyweight stack *does* fit is a **post-session deep pass** over retained
+  clips while charging — DFN3 + AST, batched and mains-powered, added as optional backlog **#31** —
+  which cannot, however, improve Tier-0 gate recall, the system-wide ceiling (retaining a full night
+  is ~1.27 GB at 22 050 Hz/16-bit, unacceptable on storage and privacy grounds). Also corrected the
+  design's own capture-rate error: the recorder runs at **22 050 Hz**, not 16 kHz, so Tier 1 needs a
+  per-window resample for YAMNet/Silero — the capture rate must not change, since every existing
+  `SpectralClassifier` threshold and `BandPassFilter` coefficient is calibrated at 22 050 Hz.
 
 - 2026-07-11 Remaining buildable backlog landed: **#11** bedtime auto-detect (`sleep/BedtimeDetector` clock-injected state machine + `service/BedtimeDetectionService`, opt-in `bedtimeAutoDetectEnabled`, `BootReceiver` restart); **#12** signal-only recorder mode (`AudioRecorderService.ACTION_START_SIGNAL_ONLY` — staging signals with zero audio retention); **#13** auto-start mic staging (`SleepTrackingService` starts/stops the signal-only recorder alongside the `micForStagingEnabled` toggle); **#7** detailed Health Connect context (`HealthContextInsights` "Health context" card on Sleep Result from caffeine/hydration/body-temperature via a separate opt-in `detailedHealthContextEnabled` permission set); **#18** end-user privacy notice (`ui/settings/PrivacyScreen`). Root `README.md` added and `docs/features.md` / `docs/issues.md` / this file (§7c, §11) refreshed to match. No production behavior changed by the doc refresh.
 
