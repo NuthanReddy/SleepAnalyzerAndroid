@@ -26,6 +26,7 @@ ADR that supersedes the old one rather than editing history.
 | [0004](0004-firebase-over-a-custom-auth-backend.md) | Firebase Authentication over a custom auth backend | Accepted |
 | [0005](0005-never-sync-raw-audio.md) | Never sync raw audio — metadata only | Accepted |
 | [0006](0006-pooled-fft-buffers-in-the-audio-pipeline.md) | Pooled FFT buffers in the audio pipeline | Accepted |
+| [0007](0007-tiered-neural-audio-pipeline.md) | Tiered neural audio pipeline over a linear one | Proposed |
 
 ## Template
 
